@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
-import { Smartphone, Battery, Info, Activity, RefreshCw, Power, Zap, PlaySquare, LayoutGrid, Trash2, TerminalSquare, Play, Square, HardDriveDownload, ShieldAlert, Unlock, UploadCloud, AlertCircle, Volume2, Sun, Moon, PowerOff, ShieldQuestion, Camera, MonitorPlay, Lock, Wrench, Cpu, Database, Wifi, Thermometer, MemoryStick, ServerCrash, Box, Upload, Terminal, FolderOpen, EyeOff, Maximize, LayoutDashboard, Globe, Radar, Bug, Flame, ChevronLeft, Circle } from 'lucide-react';
+import { Smartphone, Battery, Info, Activity, RefreshCw, Power, Zap, PlaySquare, LayoutGrid, Trash2, TerminalSquare, Play, Square, HardDriveDownload, ShieldAlert, Unlock, UploadCloud, AlertCircle, Volume2, Sun, Moon, PowerOff, ShieldQuestion, Camera, MonitorPlay, Lock, Wrench, Cpu, Database, Wifi, Thermometer, MemoryStick, ServerCrash, Box, Upload, Terminal, FolderOpen, EyeOff, Eye, X, Maximize, LayoutDashboard, Globe, Radar, Bug, Flame, ChevronLeft, Circle, Film, FileText, Printer } from 'lucide-react';
 
 const API_BASE = 'http://localhost:3001/api';
 
@@ -65,7 +65,7 @@ function App() {
   const [apps, setApps] = useState<AppItem[]>([]);
   const [selectedApp, setSelectedApp] = useState<AppItem | null>(null);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'power' | 'hardware' | 'apps' | 'logs' | 'backup' | 'root' | 'security' | 'maintenance' | 'terminal' | 'files' | 'screen' | 'privacy' | 'network' | 'taskmanager' | 'screentweaks' | 'deepscanner' | 'devtoggles' | 'thermal' | 'spoofing'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'power' | 'hardware' | 'apps' | 'logs' | 'backup' | 'root' | 'bypass' | 'security' | 'maintenance' | 'terminal' | 'files' | 'screen' | 'privacy' | 'network' | 'taskmanager' | 'screentweaks' | 'deepscanner' | 'devtoggles' | 'thermal' | 'spoofing'>('dashboard');
   const [logs, setLogs] = useState<string[]>([]);
   const [isLogging, setIsLogging] = useState(false);
   const [disclaimerAccepted, setDisclaimerAccepted] = useState(false);
@@ -115,14 +115,81 @@ function App() {
   // PRO V3 States
   const [thermalData, setThermalData] = useState<any[]>([]);
   
+  // Root States
+  const [isInstallingMagisk, setIsInstallingMagisk] = useState(false);
+  const [rootMode, setRootMode] = useState<'auto' | 'manual'>('auto');
+  const [autoPatchFile, setAutoPatchFile] = useState<File | null>(null);
+  const [isAutoPatching, setIsAutoPatching] = useState(false);
+  const [autoPatchPartition, setAutoPatchPartition] = useState<'boot' | 'init_boot'>('boot');
+  
+  // Bypass States
+  const [bruteForceStartPin, setBruteForceStartPin] = useState('0000');
+  const [bruteForceEndPin, setBruteForceEndPin] = useState('9999');
+  const [bruteForceStatus, setBruteForceStatus] = useState({ active: false, currentPin: '', lastLog: '' });
+  
   // UI Dialog States
+  const [activeBackupTask, setActiveBackupTask] = useState<{ active: boolean, type: 'backup'|'restore', filename: string }>({ active: false, type: 'backup', filename: '' });
+  const [mediaViewer, setMediaViewer] = useState<{url: string, type: 'image' | 'video' | 'document', name: string} | null>(null);
+  const [reportData, setReportData] = useState<any>(null);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [showReportBuilder, setShowReportBuilder] = useState(false);
+  const [reportOptions, setReportOptions] = useState({
+    device: true,
+    battery: true,
+    apps: true,
+    thermal: true,
+    network: true,
+    malware: true,
+    auditLog: true,
+    rootRequirements: true
+  });
+  const [auditLog, setAuditLog] = useState<{timestamp: string, module: string, action: string, result: string}[]>([]);
   const [toasts, setToasts] = useState<{ id: number; message: string; type: string }[]>([]);
   const [confirmState, setConfirmState] = useState<{ message: string; resolve: (val: boolean) => void } | null>(null);
+
+  const logAction = (module: string, action: string, result: string) => {
+    setAuditLog(prev => [...prev, {
+      timestamp: new Date().toISOString(),
+      module,
+      action,
+      result
+    }]);
+  };
 
   const customAlert = (message: string, type = 'info') => {
     const id = Date.now() + Math.random();
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
+  };
+
+  const addToast = (message: string, type = 'info') => {
+    customAlert(message, type);
+  };
+
+  const openReportBuilder = () => {
+    if (!selectedDevice) return;
+    setShowReportBuilder(true);
+  };
+
+  const generateReport = async () => {
+    if (!selectedDevice) return;
+    setShowReportBuilder(false);
+    setIsGeneratingReport(true);
+    addToast('Recopilando telemetría y generando reporte maestro...', 'info');
+    try {
+      const res = await axios.get(`${API_BASE}/device/${selectedDevice}/report`);
+      if (res.data.success) {
+        setReportData({ ...res.data.data, options: reportOptions, auditLog, malwareScanResults, networkData });
+        logAction('Reportes', 'Generación de reporte', 'Éxito');
+      } else {
+        addToast('Error generando reporte', 'error');
+        logAction('Reportes', 'Generación de reporte', 'Falló');
+      }
+    } catch(e) {
+      addToast('Error en el servidor al generar reporte', 'error');
+      logAction('Reportes', 'Generación de reporte', 'Error de Servidor');
+    }
+    setIsGeneratingReport(false);
   };
 
   const customConfirm = (message: string): Promise<boolean> => {
@@ -182,6 +249,7 @@ function App() {
       const res = await axios.get(`${API_BASE}/device/${selectedDevice}/scan-malware`);
       if (res.data.success) {
         setMalwareScanResults(res.data.results);
+        logAction('Malware Scanner', 'Escaneo completo', `Se encontraron ${res.data.results.length} resultados`);
         
         // Fetch app metadata automatically for threats
         const threats = res.data.results.filter((app: any) => app.threatScore >= 20);
@@ -197,6 +265,7 @@ function App() {
     } catch (err) {
       console.error('Failed to scan malware', err);
       addToast('Error al escanear malware');
+      logAction('Malware Scanner', 'Escaneo completo', 'Falló');
     } finally {
       setIsScanningMalware(false);
     }
@@ -211,9 +280,11 @@ function App() {
       if (res.data.success) {
         addToast('Amenaza eliminada exitosamente.');
         setMalwareScanResults(prev => prev.filter(app => app.packageName !== packageName));
+        logAction('Malware Scanner', `Desinstalación de ${packageName}`, 'Éxito');
       }
     } catch (err: any) {
       addToast('Error al eliminar amenaza: ' + (err.response?.data?.error || err.message));
+      logAction('Malware Scanner', `Desinstalación de ${packageName}`, 'Falló');
     }
   };
 
@@ -274,6 +345,42 @@ function App() {
     return () => eventSource.close();
   }, []);
 
+  // Brute Force Polling
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval>;
+    if (bruteForceStatus.active && selectedDevice) {
+      interval = setInterval(async () => {
+        try {
+          const res = await axios.get(`${API_BASE}/device/${selectedDevice}/bypass/bruteforce/status`);
+          if (res.data.success) {
+            setBruteForceStatus(res.data.status);
+          }
+        } catch(e) {}
+      }, 1500);
+    }
+    return () => clearInterval(interval);
+  }, [bruteForceStatus.active, selectedDevice]);
+
+  // Backup Task Polling
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval>;
+    if (activeTab === 'backup' && selectedDevice) {
+      interval = setInterval(async () => {
+        try {
+          const res = await axios.get(`${API_BASE}/device/${selectedDevice}/backup/status`);
+          if (res.data.success) {
+            setActiveBackupTask(res.data.status);
+            if (!res.data.status.active && activeBackupTask.active) {
+               // Status changed from active to inactive, refresh list
+               fetchBackupsList();
+            }
+          }
+        } catch(e) {}
+      }, 2000);
+    }
+    return () => clearInterval(interval);
+  }, [activeTab, selectedDevice, activeBackupTask.active]);
+
   // God Mode Fetches
   const fetchFiles = async (path: string = filesPath) => {
     if (!selectedDevice) return;
@@ -295,14 +402,42 @@ function App() {
         const res = await axios.post(`${API_BASE}/device/${selectedDevice}/files/delete-batch`, { paths: fullPaths });
         if (res.data.success) {
           customAlert(`Se eliminaron ${selectedExplorerFiles.length} elementos exitosamente`, 'success');
+          logAction('Explorador de Archivos', 'Borrado en Lote', `Éxito: ${selectedExplorerFiles.length} items`);
           fetchFiles(filesPath);
         } else {
           customAlert('Error al eliminar en lote: ' + res.data.error, 'error');
+          logAction('Explorador de Archivos', 'Borrado en Lote', 'Falló');
         }
       } catch (err: any) {
-        customAlert('Error al ejecutar borrado en lote: ' + err.message, 'error');
+        customAlert('Error al ejecutar borrado en lote: ' + err.message);
+        logAction('Explorador de Archivos', 'Borrado en Lote', 'Error de red');
       }
     }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedDevice || !filesPath) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('path', filesPath);
+
+    addToast(`Subiendo ${file.name} al dispositivo...`, 'info');
+    try {
+      const res = await axios.post(`${API_BASE}/device/${selectedDevice}/files/upload`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      if (res.data.success) {
+        addToast('Archivo subido con éxito.', 'success');
+        fetchFiles(filesPath);
+      } else {
+        customAlert('Error al subir: ' + res.data.error, 'error');
+      }
+    } catch (err: any) {
+      customAlert('Error al subir el archivo al dispositivo.', 'error');
+    }
+    e.target.value = '';
   };
 
   const handleMouseDown = (e: React.MouseEvent<HTMLImageElement>) => {
@@ -348,6 +483,7 @@ function App() {
           y2: y2Ratio * h,
           duration: Math.min(duration, 2000) // cap duration at 2 seconds
         });
+        logAction('Pantalla (Mirror)', 'Swipe', 'Enviado');
       } else {
         const xRatio = endX / rect.width;
         const yRatio = endY / rect.height;
@@ -356,10 +492,12 @@ function App() {
           x: xRatio * w, 
           y: yRatio * h 
         });
+        logAction('Pantalla (Mirror)', 'Tap', 'Enviado');
       }
       if (!isLiveScreen) setTimeout(fetchScreenshot, 500);
     } catch (err) {
       console.error('Error sending input event', err);
+      logAction('Pantalla (Mirror)', 'Input Event', 'Falló');
     }
     setDragStart(null);
   };
@@ -368,9 +506,11 @@ function App() {
     if (!selectedDevice) return;
     try {
       await axios.post(`${API_BASE}/device/${selectedDevice}/input`, { action: 'keyevent', keycode });
+      logAction('Pantalla (Mirror)', `Keycode: ${keycode}`, 'Enviado');
       if (!isLiveScreen) setTimeout(fetchScreenshot, 500);
     } catch (e) {
       console.error('Error sending keyevent', e);
+      logAction('Pantalla (Mirror)', `Keycode: ${keycode}`, 'Falló');
     }
   };
 
@@ -382,6 +522,7 @@ function App() {
       setIsRecordingVideo(false);
       addToast('Finalizando grabación y descargando MP4...');
       triggerDownload(`${API_BASE}/device/${selectedDevice}/screenrecord/stop`);
+      logAction('Pantalla (Mirror)', 'Grabación', 'Detenida');
     } else {
       // Iniciar grabación
       try {
@@ -389,9 +530,11 @@ function App() {
         if (res.data.success) {
           setIsRecordingVideo(true);
           addToast(res.data.message);
+          logAction('Pantalla (Mirror)', 'Grabación', 'Iniciada');
         }
       } catch (err: any) {
         customAlert('Error al iniciar grabación: ' + err.message);
+        logAction('Pantalla (Mirror)', 'Grabación', 'Falló');
       }
     }
   };
@@ -426,11 +569,14 @@ function App() {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/terminal`, { command: cmd });
       if (res.data.success) {
         setTerminalOutput(prev => prev.replace('Ejecutando...', '') + res.data.output + '\n');
+        logAction('Terminal ADB', `Comando: ${cmd}`, 'Éxito');
       } else {
         setTerminalOutput(prev => prev.replace('Ejecutando...', '') + `Error: ${res.data.error}\n`);
+        logAction('Terminal ADB', `Comando: ${cmd}`, 'Error en comando');
       }
     } catch (err: any) {
       setTerminalOutput(prev => prev.replace('Ejecutando...', '') + `Error de Red: ${err.message}\n`);
+      logAction('Terminal ADB', `Comando: ${cmd}`, 'Falló');
     }
   };
 
@@ -439,8 +585,14 @@ function App() {
     if (action === 'adguard-dns' && !await customConfirm('¿Estás seguro de inyectar el DNS de AdGuard a nivel sistema? Bloqueará anuncios en todo el dispositivo.')) return;
     try {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/advanced-action`, { action });
-      if (res.data.success) customAlert('Acción ejecutada correctamente.');
-    } catch (err) { customAlert('Error ejecutando comando avanzado.'); }
+      if (res.data.success) {
+        customAlert('Acción ejecutada correctamente.');
+        logAction('Modo Dios', action, 'Éxito');
+      }
+    } catch (err) { 
+      customAlert('Error ejecutando comando avanzado.');
+      logAction('Modo Dios', action, 'Falló');
+    }
   };
 
   // V2.0 Fetches
@@ -458,7 +610,11 @@ function App() {
     try {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/network/ping`);
       setPingResult(res.data.output);
-    } catch (err) { setPingResult('Error en ping'); }
+      logAction('Red', 'Ping test', 'Éxito');
+    } catch (err) { 
+      setPingResult('Error en ping'); 
+      logAction('Red', 'Ping test', 'Falló');
+    }
   };
 
   const fetchProcesses = async () => {
@@ -476,9 +632,13 @@ function App() {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/processes/kill`, { pid, packageName });
       if (res.data.success) {
         customAlert('Proceso terminado con éxito');
+        logAction('Task Manager', `Cerrar ${packageName || pid}`, 'Éxito');
         fetchProcesses();
       }
-    } catch (err) { customAlert('No se pudo matar el proceso. (Faltan permisos Root?)'); }
+    } catch (err) { 
+      customAlert('No se pudo matar el proceso. (Faltan permisos Root?)'); 
+      logAction('Task Manager', `Cerrar ${packageName || pid}`, 'Falló');
+    }
   };
 
   const applyScreenTweaks = async (action: string, value?: string) => {
@@ -487,8 +647,12 @@ function App() {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/screen/modifier`, { action, value });
       if (res.data.success) {
         customAlert(`Comando de pantalla (${action}) ejecutado.`);
+        logAction('Modificador Pantalla', action, 'Éxito');
       }
-    } catch (err) { customAlert('Error modificando la pantalla.'); }
+    } catch (err) { 
+      customAlert('Error modificando la pantalla.');
+      logAction('Modificador Pantalla', action, 'Falló');
+    }
   };
 
   // V3 Fetches
@@ -504,8 +668,14 @@ function App() {
     if (!selectedDevice) return;
     try {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/developer-toggles`, { key, value });
-      if (res.data.success) customAlert(`Cambio aplicado exitosamente: ${key}=${value}`);
-    } catch (err) { customAlert('Error al cambiar configuración de desarrollo.'); }
+      if (res.data.success) {
+        customAlert(`Cambio aplicado exitosamente: ${key}=${value}`);
+        logAction('Developer Toggles', `${key}=${value}`, 'Éxito');
+      }
+    } catch (err) { 
+      customAlert('Error al cambiar configuración de desarrollo.');
+      logAction('Developer Toggles', `${key}=${value}`, 'Falló');
+    }
   };
 
   useEffect(() => {
@@ -623,8 +793,10 @@ function App() {
     try {
       await axios.post(`${API_BASE}/device/${selectedDevice}/reboot`, { mode });
       customAlert(`Rebooting to ${mode}...`);
+      logAction('Energía', `Reinicio modo ${mode}`, 'Enviado');
     } catch (err) {
       customAlert('Failed to reboot');
+      logAction('Energía', `Reinicio modo ${mode}`, 'Falló');
     }
   };
 
@@ -632,8 +804,10 @@ function App() {
     if (!selectedDevice) return;
     try {
       await axios.post(`${API_BASE}/device/${selectedDevice}/test/${type}`);
+      logAction('Hardware Test', `Prueba: ${type}`, 'Iniciada con éxito');
     } catch (err) {
       customAlert(`Failed to execute test ${type}`);
+      logAction('Hardware Test', `Prueba: ${type}`, 'Falló');
     }
   };
 
@@ -644,11 +818,13 @@ function App() {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/apps/uninstall`, { packageName: app.packageName });
       if (res.data.success) {
         customAlert('App uninstalled successfully.');
+        logAction('Gestor de Apps', `Desinstalación de ${app.packageName}`, 'Éxito');
         setSelectedApp(null);
         fetchApps(selectedDevice);
       }
     } catch (err: any) {
       customAlert('Error: ' + (err.response?.data?.error || err.message));
+      logAction('Gestor de Apps', `Desinstalación de ${app.packageName}`, 'Falló');
     }
   };
 
@@ -674,11 +850,13 @@ function App() {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/apps/uninstall-batch`, { packageNames: bloatwareSelection });
       if (res.data.success) {
         customAlert(`Operación completada. Se eliminaron ${res.data.results.filter((r:any) => r.success).length} aplicaciones.`);
+        logAction('Gestor de Apps', 'Borrado de Bloatware', 'Éxito');
         setShowBloatwareModal(false);
         fetchApps(selectedDevice);
       }
     } catch (err: any) {
       customAlert('Error eliminando bloatware en lote: ' + err.message);
+      logAction('Gestor de Apps', 'Borrado de Bloatware', 'Falló');
     }
   };
 
@@ -688,6 +866,8 @@ function App() {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/spoof`, { type, value });
       if (res.data.success) {
         addToast(res.data.message);
+        logAction('Spoofing', type, 'Éxito');
+        fetchBatteryInfo(selectedDevice);
       }
     } catch (err: any) {
       customAlert('Error al inyectar spoofing: ' + err.message);
@@ -749,6 +929,38 @@ function App() {
     triggerDownload(`${API_BASE}/backups/download/${filename}`);
   };
 
+  const handleRestoreBackup = async (filename: string) => {
+    if (!selectedDevice) return;
+    if (!await customConfirm('¿Estás seguro de que deseas restaurar esta copia de seguridad? Se requerirá que confirmes la acción en la pantalla del celular.')) return;
+    addToast('Restauración iniciada. Por favor, revisa la pantalla del celular y aprueba la restauración.', 'info');
+    try {
+      const res = await axios.post(`${API_BASE}/device/${selectedDevice}/backup/restore`, { filename });
+      if (res.data.success) {
+        customAlert('Comando de restauración enviado con éxito', 'success');
+        logAction('Copias de Seguridad', 'Restaurar', 'Éxito');
+      } else {
+        customAlert('Error al restaurar: ' + res.data.error, 'error');
+        logAction('Copias de Seguridad', 'Restaurar', 'Error');
+      }
+    } catch (err: any) {
+      customAlert('Fallo al comunicarse con el servidor.', 'error');
+      logAction('Copias de Seguridad', 'Restaurar', 'Falló');
+    }
+  };
+
+  const handleDeleteBackup = async (filename: string) => {
+    if (!await customConfirm(`¿Estás seguro de que deseas eliminar permanentemente el respaldo "${filename}" del servidor?`)) return;
+    try {
+      const res = await axios.delete(`${API_BASE}/backups/${filename}`);
+      if (res.data.success) {
+        addToast('Respaldo eliminado con éxito', 'success');
+        fetchBackupsList();
+      }
+    } catch (err: any) {
+      customAlert('Error al eliminar respaldo: ' + (err.response?.data?.error || err.message), 'error');
+    }
+  };
+
   const handleMaintenance = async (action: string) => {
     if (!selectedDevice) return;
     try {
@@ -769,6 +981,101 @@ function App() {
       if (res.data.success) customAlert(res.data.message);
     } catch (err) {
       customAlert('Failed to send unlock command. Make sure device is in Bootloader mode.');
+    }
+  };
+
+  const handleInstallMagisk = async () => {
+    if (!selectedDevice) return;
+    setIsInstallingMagisk(true);
+    addToast('Descargando e instalando Magisk... Esto puede tardar unos segundos.', 'info');
+    try {
+      const res = await axios.post(`${API_BASE}/device/${selectedDevice}/fastboot/install-magisk`);
+      if (res.data.success) {
+        customAlert(res.data.message, 'success');
+        logAction('Asistente Root', 'Instalar Magisk App', 'Éxito');
+      } else {
+        customAlert('Error instalando Magisk: ' + res.data.error, 'error');
+        logAction('Asistente Root', 'Instalar Magisk App', 'Error');
+      }
+    } catch (err: any) {
+      customAlert('Error de red al instalar Magisk', 'error');
+      logAction('Asistente Root', 'Instalar Magisk App', 'Falló');
+    }
+    setIsInstallingMagisk(false);
+  };
+
+  const handleAutoPatch = async () => {
+    if (!selectedDevice || !autoPatchFile) return;
+    if (selectedBrand === 'samsung') return customAlert('Samsung requiere Odin. AutoPatch no funciona en Samsung.');
+    
+    const formData = new FormData();
+    formData.append('file', autoPatchFile);
+    formData.append('partition', autoPatchPartition);
+
+    setIsAutoPatching(true);
+    addToast('Iniciando Motor AutoPatch. Esto tomará de 1 a 2 minutos...', 'info');
+    try {
+      const res = await axios.post(`${API_BASE}/device/${selectedDevice}/fastboot/autopatch`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 120000 // 2 mins timeout
+      });
+      if (res.data.success) {
+        customAlert(res.data.message, 'success');
+        setAutoPatchFile(null);
+        logAction('Asistente Root', 'AutoPatch Server', 'Éxito');
+      } else {
+        customAlert('Error en AutoPatch: ' + res.data.error, 'error');
+        logAction('Asistente Root', 'AutoPatch Server', 'Error');
+      }
+    } catch (err: any) {
+      customAlert(err.response?.data?.error || err.message || 'Error de red en AutoPatch', 'error');
+      logAction('Asistente Root', 'AutoPatch Server', 'Falló');
+    }
+    setIsAutoPatching(false);
+  };
+
+  const handleTWRPBypass = async () => {
+    if (!selectedDevice) return;
+    if (await customConfirm('¿Estás seguro de que quieres eliminar las bases de datos de seguridad? Esto requiere que el dispositivo tenga acceso Root activo o que estés en TWRP.')) {
+      try {
+        const res = await axios.post(`${API_BASE}/device/${selectedDevice}/bypass/twrp`);
+        if (res.data.success) {
+          customAlert(res.data.message, 'success');
+          logAction('Bypass', 'Bypass TWRP/Root', 'Éxito');
+        }
+      } catch (err: any) {
+        customAlert(err.response?.data?.error || err.message, 'error');
+        logAction('Bypass', 'Bypass TWRP/Root', 'Falló');
+      }
+    }
+  };
+
+  const handleBruteForceStart = async () => {
+    if (!selectedDevice) return;
+    try {
+      const res = await axios.post(`${API_BASE}/device/${selectedDevice}/bypass/bruteforce/start`, {
+        startPin: bruteForceStartPin,
+        endPin: bruteForceEndPin
+      });
+      if (res.data.success) {
+        addToast(res.data.message, 'success');
+        setBruteForceStatus({ active: true, currentPin: '', lastLog: 'Iniciando...' });
+        logAction('Bypass', 'Fuerza Bruta ADB', 'Iniciado');
+      }
+    } catch (err: any) {
+      customAlert(err.response?.data?.error || err.message, 'error');
+    }
+  };
+
+  const handleBruteForceStop = async () => {
+    if (!selectedDevice) return;
+    try {
+      await axios.post(`${API_BASE}/device/${selectedDevice}/bypass/bruteforce/stop`);
+      addToast('Solicitud de detención enviada.', 'info');
+      setBruteForceStatus(prev => ({ ...prev, active: false }));
+      logAction('Bypass', 'Fuerza Bruta ADB', 'Detenido');
+    } catch (err: any) {
+      customAlert(err.response?.data?.error || err.message, 'error');
     }
   };
 
@@ -861,6 +1168,10 @@ function App() {
             <EyeOff className="w-5 h-5" />
             <span>Gestor de Privacidad</span>
           </button>
+          <button onClick={() => setActiveTab('bypass')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all font-medium ${activeTab === 'bypass' ? 'bg-violet-500/20 text-violet-400 shadow-[inset_0_0_20px_rgba(139,92,246,0.1)] border border-violet-500/20' : 'hover:bg-[#0a0a0f] text-slate-400 hover:text-slate-200 border border-transparent'}`}>
+            <Unlock className="w-5 h-5" />
+            <span>Bypass y Desbloqueo</span>
+          </button>
           
           <div className="h-px bg-cyan-900/40 my-4 shadow-[0_0_10px_rgba(6,182,212,0.5)]"></div>
           <p className="text-[10px] font-bold text-cyan-500 uppercase tracking-[0.2em] mb-3 px-2">V3.0 TECH HUD</p>
@@ -884,8 +1195,8 @@ function App() {
             <span>Deep Scanner</span>
           </button>
           <button onClick={() => setActiveTab('devtoggles')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all font-medium ${activeTab === 'devtoggles' ? 'glass-panel neon-border-cyan neon-text-cyan' : 'hover:bg-[#0a0a0f] text-slate-400 hover:text-slate-200 border border-transparent'}`}>
-            <Terminal className="w-5 h-5" />
-            <span>Dev HUD Toggles</span>
+            <Wrench className="w-5 h-5" />
+            <span>Opciones de Desarrollador</span>
           </button>
           <button onClick={() => setActiveTab('thermal')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all font-medium ${activeTab === 'thermal' ? 'bg-orange-500/20 text-orange-400 shadow-[inset_0_0_20px_rgba(249,115,22,0.1)] border border-orange-500/20' : 'hover:bg-[#0a0a0f] text-slate-400 hover:text-slate-200 border border-transparent'}`}>
             <Flame className="w-5 h-5" />
@@ -917,18 +1228,29 @@ function App() {
              activeTab === 'network' ? 'Escáner de Red y Conectividad' :
              activeTab === 'taskmanager' ? 'Gestor de Tareas en Vivo' :
              activeTab === 'screentweaks' ? 'Ajustes Visuales (Resolución/DPI)' :
+             activeTab === 'devtoggles' ? 'Opciones de Desarrollador' :
              activeTab === 'thermal' ? 'Perfilador Térmico y Estrés' :
              activeTab === 'spoofing' ? 'Spoofing de Hardware (Modo Dev)' :
              'Diagnóstico de Seguridad'}
           </h2>
-          <button
-            onClick={fetchDevices}
-            disabled={loading}
-            className="flex items-center space-x-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 px-5 py-2.5 rounded-xl transition-all shadow-[0_0_15px_rgba(6,182,212,0.4)] text-white font-medium border border-cyan-400/30"
-          >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            <span>Actualizar Dispositivos</span>
-          </button>
+          <div className="flex space-x-3">
+            <button
+              onClick={openReportBuilder}
+              disabled={isGeneratingReport || !selectedDevice}
+              className="flex items-center space-x-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 px-5 py-2.5 rounded-xl transition-all shadow-[0_0_15px_rgba(168,85,247,0.4)] text-white font-medium border border-purple-400/30 disabled:opacity-50"
+            >
+              <Printer className={`w-4 h-4 ${isGeneratingReport ? 'animate-pulse' : ''}`} />
+              <span>{isGeneratingReport ? 'Generando...' : 'Generar Reporte'}</span>
+            </button>
+            <button
+              onClick={fetchDevices}
+              disabled={loading}
+              className="flex items-center space-x-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 px-5 py-2.5 rounded-xl transition-all shadow-[0_0_15px_rgba(6,182,212,0.4)] text-white font-medium border border-cyan-400/30"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              <span>Actualizar Dispositivos</span>
+            </button>
+          </div>
         </header>
 
         {devices.length === 0 ? (
@@ -1525,6 +1847,24 @@ function App() {
                       </div>
                     </div>
 
+                    {activeBackupTask.active && (
+                      <div className="bg-slate-900/80 border border-indigo-500/50 rounded-2xl p-6 mb-8 relative z-10 shadow-[0_0_15px_rgba(99,102,241,0.2)]">
+                        <div className="flex items-center justify-between mb-2">
+                          <h4 className="text-indigo-400 font-bold flex items-center">
+                            <RefreshCw className="w-5 h-5 mr-2 animate-spin" />
+                            {activeBackupTask.type === 'backup' ? 'Generando Copia de Seguridad...' : 'Restaurando Copia de Seguridad...'}
+                          </h4>
+                          <span className="text-xs text-slate-400 font-mono">{activeBackupTask.filename}</span>
+                        </div>
+                        <p className="text-sm text-slate-300 mb-4">
+                          Esta operación se está ejecutando en segundo plano. Por favor, mantén la pantalla del celular encendida y desbloqueada.
+                        </p>
+                        <div className="w-full bg-slate-800 rounded-full h-2.5 overflow-hidden">
+                          <div className="bg-indigo-500 h-2.5 rounded-full w-full animate-pulse opacity-80" style={{ backgroundImage: 'linear-gradient(45deg, rgba(255,255,255,.15) 25%, transparent 25%, transparent 50%, rgba(255,255,255,.15) 50%, rgba(255,255,255,.15) 75%, transparent 75%, transparent)', backgroundSize: '1rem 1rem' }}></div>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="relative z-10">
                       <div className="flex items-center justify-between mb-4">
                         <h4 className="text-xl font-bold text-slate-100 flex items-center"><HardDriveDownload className="w-5 h-5 mr-2 text-indigo-400"/> Archivos de Respaldo Locales</h4>
@@ -1544,13 +1884,29 @@ function App() {
                                     {(backup.size / (1024 * 1024)).toFixed(2)} MB • {new Date(backup.createdAt).toLocaleString()}
                                   </p>
                                 </div>
-                                <button 
-                                  onClick={() => handleDownloadBackup(backup.filename)}
-                                  className="px-4 py-2 bg-indigo-600/20 hover:bg-indigo-600 hover:text-white text-indigo-300 rounded-lg text-sm transition-all border border-indigo-500/30 hover:border-indigo-500 font-medium shadow-sm flex items-center"
-                                >
-                                  <HardDriveDownload className="w-4 h-4 mr-2" />
-                                  Descargar al Equipo
-                                </button>
+                                <div className="flex space-x-2">
+                                  <button 
+                                    onClick={() => handleDownloadBackup(backup.filename)}
+                                    className="px-4 py-2 bg-indigo-600/20 hover:bg-indigo-600 hover:text-white text-indigo-300 rounded-lg text-sm transition-all border border-indigo-500/30 hover:border-indigo-500 font-medium shadow-sm flex items-center"
+                                  >
+                                    <HardDriveDownload className="w-4 h-4 mr-2" />
+                                    Descargar al Equipo
+                                  </button>
+                                  <button 
+                                    onClick={() => handleRestoreBackup(backup.filename)}
+                                    className="px-4 py-2 bg-emerald-600/20 hover:bg-emerald-600 hover:text-white text-emerald-300 rounded-lg text-sm transition-all border border-emerald-500/30 hover:border-emerald-500 font-medium shadow-sm flex items-center"
+                                  >
+                                    <RefreshCw className="w-4 h-4 mr-2" />
+                                    Restaurar en Dispositivo
+                                  </button>
+                                  <button 
+                                    onClick={() => handleDeleteBackup(backup.filename)}
+                                    className="p-2 bg-rose-600/20 hover:bg-rose-600 hover:text-white text-rose-300 rounded-lg transition-all border border-rose-500/30 hover:border-rose-500 shadow-sm"
+                                    title="Eliminar Respaldo"
+                                  >
+                                    <X className="w-5 h-5" />
+                                  </button>
+                                </div>
                               </div>
                             ))}
                           </div>
@@ -1598,15 +1954,88 @@ function App() {
                       </div>
                     ) : (
                       <div className="relative z-10">
-                        <div className="flex items-center space-x-3 mb-8">
+                        <div className="flex items-center space-x-3 mb-6">
                           <div className="p-3 bg-red-500/20 rounded-xl">
                             <ShieldAlert className="text-red-500 w-6 h-6" />
                           </div>
                           <h3 className="text-2xl font-bold text-slate-100">Asistente Root y Flasheo</h3>
                         </div>
+
+                        <div className="flex bg-slate-800/80 p-1.5 rounded-xl mb-8 w-max border border-slate-700 shadow-inner">
+                          <button onClick={() => setRootMode('auto')} className={`px-6 py-2.5 rounded-lg font-bold text-sm transition-all flex items-center space-x-2 ${rootMode === 'auto' ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'}`}>
+                            <Zap className="w-4 h-4" />
+                            <span>AutoPatch (Recomendado)</span>
+                          </button>
+                          <button onClick={() => setRootMode('manual')} className={`px-6 py-2.5 rounded-lg font-bold text-sm transition-all flex items-center space-x-2 ${rootMode === 'manual' ? 'bg-gradient-to-r from-orange-600 to-red-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'}`}>
+                            <Wrench className="w-4 h-4" />
+                            <span>Modo Manual</span>
+                          </button>
+                        </div>
                         
-                        <div className="bg-slate-900/60 border border-slate-700/50 rounded-2xl p-6 mb-8 shadow-inner">
-                          <div className="flex justify-between items-center mb-6 border-b border-slate-800 pb-4">
+                        {rootMode === 'auto' && (
+                          <div className="bg-slate-900/60 border border-slate-700/50 rounded-2xl p-6 mb-8 shadow-inner">
+                            <div className="flex items-start space-x-4 mb-6">
+                              <div className="p-3 bg-indigo-500/20 rounded-xl border border-indigo-500/30">
+                                <Cpu className="text-indigo-400 w-8 h-8" />
+                              </div>
+                              <div>
+                                <h4 className="font-bold text-slate-200 text-xl mb-1">Motor de Parcheo Automático</h4>
+                                <p className="text-sm text-slate-400">
+                                  El servidor utilizará la CPU de tu dispositivo Android de forma invisible para inyectar los binarios de Magisk en el firmware original, parcheándolo y flasheándolo de manera 100% automática.
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="flex items-start space-x-3 text-blue-200 bg-blue-950/40 p-4 rounded-xl border border-blue-500/30 mb-6">
+                              <Info className="w-6 h-6 flex-shrink-0 mt-0.5 text-blue-400" />
+                              <div className="text-sm">
+                                <strong className="text-base text-blue-300">Requisito Importante:</strong><br/>
+                                Para que este motor funcione, el teléfono debe estar <strong>Encendido de forma normal con Depuración USB habilitada</strong>. El servidor se encargará de reiniciarlo a modo Fastboot automáticamente cuando sea necesario. Samsung no es compatible con el motor automático.
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-5">
+                                <h5 className="font-bold text-slate-300 mb-3">1. Sube tu imagen original</h5>
+                                <label className={`flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-xl cursor-pointer transition-colors ${selectedBrand === 'samsung' ? 'border-slate-700 bg-slate-900' : 'border-indigo-500/40 bg-indigo-900/20 hover:bg-indigo-900/40 hover:border-indigo-400'}`}>
+                                  <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                                    <UploadCloud className={`w-8 h-8 mb-3 ${selectedBrand === 'samsung' ? 'text-slate-600' : 'text-indigo-400'}`} />
+                                    <p className="text-sm text-slate-300 font-medium text-center px-4">{autoPatchFile ? autoPatchFile.name : 'Arrastra el boot.img, init_boot.img ORIGINAL o el .zip del firmware aquí'}</p>
+                                  </div>
+                                  <input type="file" className="hidden" accept=".img,.zip" onChange={(e) => e.target.files && setAutoPatchFile(e.target.files[0])} disabled={selectedBrand === 'samsung' || isAutoPatching} />
+                                </label>
+                              </div>
+
+                              <div className="flex flex-col justify-center space-y-4">
+                                <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
+                                  <label className="block text-sm font-medium text-slate-400 mb-2">Partición de destino:</label>
+                                  <select 
+                                    className="w-full bg-slate-900 text-white border border-slate-600 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-indigo-500"
+                                    value={autoPatchPartition}
+                                    onChange={(e: any) => setAutoPatchPartition(e.target.value)}
+                                  >
+                                    <option value="boot">boot (Android 12 y anterior)</option>
+                                    <option value="init_boot">init_boot (Android 13 y superior)</option>
+                                  </select>
+                                </div>
+
+                                <button 
+                                  onClick={handleAutoPatch}
+                                  disabled={!autoPatchFile || selectedBrand === 'samsung' || isAutoPatching}
+                                  className={`w-full py-4 rounded-xl font-bold transition-all text-lg shadow-lg flex items-center justify-center space-x-3 ${(!autoPatchFile || selectedBrand === 'samsung' || isAutoPatching) ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700' : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-[0_0_20px_rgba(79,70,229,0.4)]'}`}
+                                >
+                                  {isAutoPatching ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Zap className="w-5 h-5" />}
+                                  <span>{isAutoPatching ? 'Procesando AutoPatch...' : 'Iniciar AutoPatch & Flasheo'}</span>
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {rootMode === 'manual' && (
+                          <>
+                            <div className="bg-slate-900/60 border border-slate-700/50 rounded-2xl p-6 mb-8 shadow-inner">
+                            <div className="flex justify-between items-center mb-6 border-b border-slate-800 pb-4">
                             <h4 className="font-bold text-slate-200 text-lg">Guía Específica por Marca</h4>
                             <select 
                               className="bg-slate-800 text-white border border-slate-600 rounded-lg px-4 py-2 text-sm focus:outline-none font-medium cursor-pointer hover:bg-slate-700 transition-colors"
@@ -1648,11 +2077,52 @@ function App() {
                           </div>
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
+                        {deviceInfo && (
+                          <div className="bg-slate-900/60 border border-slate-700/50 rounded-2xl p-6 mb-8 shadow-inner">
+                            <h4 className="font-bold text-slate-200 text-lg mb-4 flex items-center">
+                              <Globe className="w-5 h-5 mr-2 text-blue-400" />
+                              Buscar Firmware Original (Stock ROM)
+                            </h4>
+                            <p className="text-sm text-slate-400 mb-4">
+                              Para realizar el proceso de root necesitas extraer el archivo <code className="bg-slate-800 px-1 rounded text-slate-300">boot.img</code> o <code className="bg-slate-800 px-1 rounded text-slate-300">init_boot.img</code> del firmware exacto que tiene instalado tu dispositivo. Usa los siguientes enlaces generados para tu <strong className="text-white">{deviceInfo.manufacturer} {deviceInfo.model}</strong>:
+                            </p>
+                            <div className="flex flex-wrap gap-3">
+                              <a href={`https://www.google.com/search?q=Stock+ROM+Firmware+${deviceInfo.manufacturer}+${deviceInfo.model}`} target="_blank" rel="noopener noreferrer" className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-blue-400 rounded-lg border border-slate-700 transition-colors text-sm font-bold flex items-center">
+                                Google Search
+                              </a>
+                              <a href={`https://xdaforums.com/search/1/?q=${deviceInfo.model}+firmware`} target="_blank" rel="noopener noreferrer" className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-orange-400 rounded-lg border border-slate-700 transition-colors text-sm font-bold flex items-center">
+                                Foros XDA
+                              </a>
+                              {deviceInfo.manufacturer?.toLowerCase().includes('samsung') && (
+                                <a href={`https://samfw.com/firmware/${deviceInfo.model}`} target="_blank" rel="noopener noreferrer" className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-blue-300 rounded-lg border border-slate-700 transition-colors text-sm font-bold flex items-center">
+                                  SamFW (Samsung)
+                                </a>
+                              )}
+                              {(deviceInfo.manufacturer?.toLowerCase().includes('xiaomi') || deviceInfo.manufacturer?.toLowerCase().includes('poco') || deviceInfo.manufacturer?.toLowerCase().includes('redmi')) && (
+                                <a href={`https://mifirm.net/model/${deviceInfo.board || ''}`} target="_blank" rel="noopener noreferrer" className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-orange-500 rounded-lg border border-slate-700 transition-colors text-sm font-bold flex items-center">
+                                  MiFirm (Xiaomi)
+                                </a>
+                              )}
+                              {deviceInfo.manufacturer?.toLowerCase().includes('google') && (
+                                <a href="https://developers.google.com/android/images" target="_blank" rel="noopener noreferrer" className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-green-400 rounded-lg border border-slate-700 transition-colors text-sm font-bold flex items-center">
+                                  Google Factory Images
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-4">
                           <button onClick={handleUnlockBootloader} disabled={selectedBrand === 'samsung'} className={`p-8 border rounded-2xl transition-all flex flex-col items-center justify-center space-y-3 group shadow-lg ${selectedBrand === 'samsung' ? 'bg-slate-900/50 border-slate-800 opacity-50 cursor-not-allowed' : 'bg-red-950/20 hover:bg-red-900/40 border-red-900/50 hover:border-red-500/50'}`}>
                             <Unlock className={`w-10 h-10 transition-colors ${selectedBrand === 'samsung' ? 'text-slate-600' : 'text-slate-400 group-hover:text-red-400'}`} />
                             <span className={`font-bold text-xl ${selectedBrand === 'samsung' ? 'text-slate-500' : 'text-red-100'}`}>Desbloquear Bootloader</span>
                             <span className="text-sm text-slate-500 text-center">Desbloqueo estándar vía fastboot (Factory Reset)</span>
+                          </button>
+
+                          <button onClick={handleInstallMagisk} disabled={isInstallingMagisk} className={`p-8 border rounded-2xl transition-all flex flex-col items-center justify-center space-y-3 group shadow-lg ${isInstallingMagisk ? 'bg-slate-900/50 border-slate-800 opacity-50 cursor-wait' : 'bg-green-950/20 hover:bg-green-900/40 border-green-900/50 hover:border-green-500/50'}`}>
+                            <Box className={`w-10 h-10 transition-colors ${isInstallingMagisk ? 'text-slate-600 animate-pulse' : 'text-slate-400 group-hover:text-green-400'}`} />
+                            <span className={`font-bold text-xl ${isInstallingMagisk ? 'text-slate-500' : 'text-green-100'}`}>{isInstallingMagisk ? 'Instalando...' : 'Instalar Magisk App'}</span>
+                            <span className="text-sm text-slate-500 text-center">Descarga e instala la app oficial para parchear el archivo boot.img</span>
                           </button>
                           
                           <div className={`p-6 border rounded-2xl transition-all flex flex-col items-center justify-center space-y-4 shadow-lg ${selectedBrand === 'samsung' ? 'bg-slate-900/50 border-slate-800 opacity-50' : 'bg-blue-950/20 border-blue-900/50'}`}>
@@ -1674,10 +2144,125 @@ function App() {
                             </button>
                           </div>
                         </div>
+                        </>
+                        )}
                       </div>
                     )}
                   </div>
                 )}
+                {/* BYPASS AND UNLOCK TAB */}
+                {activeTab === 'bypass' && (
+                  <div className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 backdrop-blur-sm space-y-6">
+                    <div className="flex items-center space-x-3 mb-4">
+                      <div className="p-3 bg-violet-500/20 rounded-xl">
+                        <Unlock className="w-8 h-8 text-violet-400" />
+                      </div>
+                      <div>
+                        <h3 className="text-2xl font-bold text-slate-100">Bypass y Desbloqueo</h3>
+                        <p className="text-slate-400 text-sm mt-1">Herramientas avanzadas para recuperación de acceso</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      {/* TWRP/Root Bypass Card */}
+                      <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 relative overflow-hidden">
+                        <div className="absolute top-0 right-0 w-32 h-32 bg-green-500/5 rounded-full blur-2xl"></div>
+                        <h4 className="text-xl font-bold text-slate-200 mb-2 flex items-center">
+                          <ShieldAlert className="w-5 h-5 mr-2 text-green-400" />
+                          Bypass por TWRP / Root
+                        </h4>
+                        <p className="text-sm text-slate-400 mb-6">
+                          Elimina directamente los archivos de base de datos que controlan el PIN, patrón o contraseña. Requiere que el dispositivo tenga acceso Root o un Custom Recovery (TWRP) iniciado con la partición /data montada.
+                        </p>
+                        
+                        <div className="bg-slate-950 p-4 rounded-lg border border-slate-800 mb-6">
+                          <code className="text-xs text-green-400 font-mono break-all">
+                            rm -f /data/system/locksettings.db* /data/system/password.key ...
+                          </code>
+                        </div>
+
+                        <button
+                          onClick={handleTWRPBypass}
+                          disabled={!selectedDevice}
+                          className={`w-full py-3 rounded-xl font-bold transition-all shadow-lg flex items-center justify-center space-x-2 ${!selectedDevice ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-green-600/20 hover:bg-green-600 text-green-400 hover:text-white border border-green-500/30'}`}
+                        >
+                          <Unlock className="w-5 h-5" />
+                          <span>Purgar Bases de Datos</span>
+                        </button>
+                      </div>
+
+                      {/* Brute Force Card */}
+                      <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 relative flex flex-col h-full">
+                        <div className="absolute top-0 right-0 w-32 h-32 bg-violet-500/5 rounded-full blur-2xl"></div>
+                        <h4 className="text-xl font-bold text-slate-200 mb-2 flex items-center">
+                          <Zap className="w-5 h-5 mr-2 text-violet-400" />
+                          Inyección por Fuerza Bruta
+                        </h4>
+                        <p className="text-sm text-slate-400 mb-6">
+                          Automatiza la inyección de pines vía teclado ADB (`input text`). Solo funciona si la Depuración USB ya estaba activada en el equipo bloqueado. Maneja automáticamente los tiempos de espera de 30s de Android.
+                        </p>
+                        
+                        <div className="grid grid-cols-2 gap-4 mb-4">
+                          <div>
+                            <label className="block text-xs text-slate-400 mb-1">PIN Inicial</label>
+                            <input 
+                              type="text" 
+                              maxLength={4}
+                              className="w-full bg-slate-950 text-white border border-slate-700 rounded-lg px-4 py-2 font-mono text-center focus:border-violet-500 focus:outline-none"
+                              value={bruteForceStartPin}
+                              onChange={(e) => setBruteForceStartPin(e.target.value.replace(/\D/g, ''))}
+                              disabled={bruteForceStatus.active}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-slate-400 mb-1">PIN Final</label>
+                            <input 
+                              type="text" 
+                              maxLength={4}
+                              className="w-full bg-slate-950 text-white border border-slate-700 rounded-lg px-4 py-2 font-mono text-center focus:border-violet-500 focus:outline-none"
+                              value={bruteForceEndPin}
+                              onChange={(e) => setBruteForceEndPin(e.target.value.replace(/\D/g, ''))}
+                              disabled={bruteForceStatus.active}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Status Console */}
+                        <div className="flex-1 bg-black/50 border border-slate-800 rounded-lg p-4 mb-4 flex flex-col justify-center items-center min-h-[100px]">
+                          {bruteForceStatus.active ? (
+                            <>
+                              <RefreshCw className="w-6 h-6 text-violet-400 animate-spin mb-2" />
+                              <div className="text-3xl font-mono text-white mb-1 tracking-widest">{bruteForceStatus.currentPin || '----'}</div>
+                              <p className="text-xs text-violet-300 text-center">{bruteForceStatus.lastLog}</p>
+                            </>
+                          ) : (
+                            <p className="text-sm text-slate-500 font-mono text-center">{bruteForceStatus.lastLog || 'Inactivo'}</p>
+                          )}
+                        </div>
+
+                        {bruteForceStatus.active ? (
+                          <button
+                            onClick={handleBruteForceStop}
+                            className="w-full py-3 rounded-xl font-bold transition-all bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white border border-red-500/30 flex justify-center items-center"
+                          >
+                            <X className="w-5 h-5 mr-2" />
+                            Detener Ataque
+                          </button>
+                        ) : (
+                          <button
+                            onClick={handleBruteForceStart}
+                            disabled={!selectedDevice || !bruteForceStartPin || !bruteForceEndPin}
+                            className={`w-full py-3 rounded-xl font-bold transition-all shadow-lg flex items-center justify-center space-x-2 ${(!selectedDevice || !bruteForceStartPin || !bruteForceEndPin) ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-violet-600 hover:bg-violet-500 text-white shadow-[0_0_15px_rgba(139,92,246,0.4)]'}`}
+                          >
+                            <Play className="w-5 h-5" />
+                            <span>Iniciar Ataque</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
 
                 {/* SECURITY DIAGNOSTICS TAB */}
                 {activeTab === 'security' && (
@@ -2083,6 +2668,11 @@ function App() {
                         <h3 className="text-2xl font-bold text-slate-100">Explorador de Archivos</h3>
                       </div>
                       <div className="flex space-x-2">
+                        <label className="cursor-pointer px-4 py-2 bg-blue-600/20 hover:bg-blue-600 text-blue-400 hover:text-white rounded-lg text-sm font-bold border border-blue-500/30 transition-colors flex items-center">
+                          <UploadCloud className="w-4 h-4 mr-2" />
+                          Subir Archivo
+                          <input type="file" className="hidden" onChange={handleFileUpload} />
+                        </label>
                         <button onClick={() => fetchFiles(filesPath.split('/').slice(0, -1).join('/') || '/')} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm font-bold text-slate-300 transition-colors">↑ Subir de Nivel</button>
                         <button onClick={() => fetchFiles(filesPath)} className="px-4 py-2 bg-yellow-600/20 hover:bg-yellow-600 text-yellow-400 hover:text-white rounded-lg text-sm font-bold border border-yellow-500/30 transition-colors">Actualizar</button>
                       </div>
@@ -2144,7 +2734,16 @@ function App() {
                                     }}
                                   />
                                 </td>
-                                <td className="px-4 py-3 cursor-pointer" onClick={() => f.isDir && fetchFiles(filesPath + (filesPath.endsWith('/') ? '' : '/') + f.name)}>{f.isDir ? <FolderOpen className="text-yellow-500 w-4 h-4" /> : <Box className="text-slate-400 w-4 h-4" />}</td>
+                                <td className="px-4 py-3 cursor-pointer" onClick={() => f.isDir && fetchFiles(filesPath + (filesPath.endsWith('/') ? '' : '/') + f.name)}>
+                                  {f.isDir ? <FolderOpen className="text-yellow-500 w-4 h-4" /> : 
+                                   /\.(jpe?g|png|gif|webp|bmp)$/i.test(f.name) ? (
+                                     <img src={`${API_BASE}/device/${selectedDevice}/files/view?path=${encodeURIComponent(filesPath + (filesPath.endsWith('/') ? '' : '/') + f.name)}`} loading="lazy" className="w-16 h-16 object-cover rounded-md bg-slate-800 shadow-md" alt="thumb" />
+                                   ) : /\.(mp4|mkv|webm|mov|avi)$/i.test(f.name) ? (
+                                     <Film className="text-purple-400 w-4 h-4" />
+                                   ) : /\.(pdf|txt|json|xml|log|csv)$/i.test(f.name) ? (
+                                     <FileText className="text-blue-400 w-4 h-4" />
+                                   ) : <Box className="text-slate-400 w-4 h-4" />}
+                                </td>
                                 <td className="px-4 py-3 cursor-pointer" onClick={() => f.isDir && fetchFiles(filesPath + (filesPath.endsWith('/') ? '' : '/') + f.name)}>
                                   <span className={`${f.isDir ? 'text-yellow-300 hover:underline' : 'text-slate-300'}`}>{f.name}</span>
                                 </td>
@@ -2152,9 +2751,24 @@ function App() {
                                 <td className="px-4 py-3 text-slate-500">{f.date}</td>
                                 <td className="px-4 py-3 text-right">
                                   {!f.isDir && (
-                                    <button onClick={() => triggerDownload(`${API_BASE}/device/${selectedDevice}/files/download?path=${encodeURIComponent(filesPath + (filesPath.endsWith('/') ? '' : '/') + f.name)}`)} className="p-1.5 text-blue-400 hover:bg-blue-500/20 rounded mr-2 opacity-0 group-hover:opacity-100 transition-all" title="Descargar archivo">
-                                      <HardDriveDownload className="w-4 h-4" />
-                                    </button>
+                                    <>
+                                      {(/\.(jpe?g|png|gif|webp|bmp)$/i.test(f.name) || /\.(mp4|mkv|webm|mov|avi)$/i.test(f.name) || /\.(pdf|txt|json|xml|log|csv)$/i.test(f.name)) && (
+                                        <button 
+                                          onClick={() => setMediaViewer({ 
+                                            url: `${API_BASE}/device/${selectedDevice}/files/view?path=${encodeURIComponent(filesPath + (filesPath.endsWith('/') ? '' : '/') + f.name)}`, 
+                                            type: /\.(mp4|mkv|webm|mov|avi)$/i.test(f.name) ? 'video' : /\.(pdf|txt|json|xml|log|csv)$/i.test(f.name) ? 'document' : 'image', 
+                                            name: f.name 
+                                          })} 
+                                          className="p-1.5 text-purple-400 hover:bg-purple-500/20 rounded mr-2 opacity-0 group-hover:opacity-100 transition-all" 
+                                          title="Ver archivo"
+                                        >
+                                          <Eye className="w-4 h-4" />
+                                        </button>
+                                      )}
+                                      <button onClick={() => triggerDownload(`${API_BASE}/device/${selectedDevice}/files/download?path=${encodeURIComponent(filesPath + (filesPath.endsWith('/') ? '' : '/') + f.name)}`)} className="p-1.5 text-blue-400 hover:bg-blue-500/20 rounded mr-2 opacity-0 group-hover:opacity-100 transition-all" title="Descargar archivo">
+                                        <HardDriveDownload className="w-4 h-4" />
+                                      </button>
+                                    </>
                                   )}
                                     <button onClick={async () => {
                                       if(await customConfirm(`¿Eliminar ${f.name}?`)) {
@@ -2506,44 +3120,120 @@ function App() {
                 {activeTab === 'devtoggles' && (
                   <div className="glass-panel rounded-3xl p-6 relative overflow-hidden">
                     <div className="flex items-center space-x-3 mb-8 relative z-10">
-                      <div className="p-3 bg-fuchsia-900/40 rounded-xl border border-fuchsia-500/30 shadow-[0_0_15px_rgba(217,70,239,0.3)]"><Terminal className="text-fuchsia-400 w-6 h-6" /></div>
+                      <div className="p-3 bg-fuchsia-900/40 rounded-xl border border-fuchsia-500/30 shadow-[0_0_15px_rgba(217,70,239,0.3)]"><Wrench className="text-fuchsia-400 w-6 h-6" /></div>
                       <div>
-                        <h3 className="text-2xl font-bold text-slate-100 drop-shadow-[0_0_10px_rgba(255,255,255,0.3)]">Developer HUD Toggles</h3>
-                        <p className="text-fuchsia-400 text-sm font-mono tracking-widest">LIVE_SCREEN_MODIFIERS</p>
+                        <h3 className="text-2xl font-bold text-slate-100 drop-shadow-[0_0_10px_rgba(255,255,255,0.3)]">Opciones de Desarrollador</h3>
+                        <p className="text-fuchsia-400 text-sm font-mono tracking-widest">ADVANCED_SYSTEM_CONTROLS</p>
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 relative z-10">
-                      <div className="bg-[#030712]/80 backdrop-blur-md p-6 rounded-2xl border border-fuchsia-900/50 flex flex-col justify-between">
-                        <div>
-                          <h4 className="text-fuchsia-300 font-bold mb-2 flex items-center"><Activity className="w-4 h-4 mr-2" /> Mostrar Toques</h4>
-                          <p className="text-xs text-slate-400 mb-6">Muestra un círculo blanco en la pantalla donde el usuario está tocando físicamente.</p>
-                        </div>
-                        <div className="flex space-x-3">
-                          <button onClick={() => setDevToggle('show_touches', '1')} className="flex-1 bg-fuchsia-600/20 hover:bg-fuchsia-600 text-fuchsia-400 hover:text-white py-2 rounded-xl font-bold border border-fuchsia-500/30 transition-all text-sm">ON</button>
-                          <button onClick={() => setDevToggle('show_touches', '0')} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-2 rounded-xl font-bold border border-slate-700 transition-all text-sm">OFF</button>
+                    <div className="space-y-8 relative z-10">
+                      {/* Section 1: Entrada y Visual */}
+                      <div>
+                        <h4 className="text-lg font-bold text-slate-300 border-b border-slate-700 pb-2 mb-4">Entrada y Visualización</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                          <div className="bg-[#030712]/80 backdrop-blur-md p-6 rounded-2xl border border-fuchsia-900/50 flex flex-col justify-between">
+                            <div>
+                              <h4 className="text-fuchsia-300 font-bold mb-2 flex items-center"><Activity className="w-4 h-4 mr-2" /> Mostrar Toques</h4>
+                              <p className="text-xs text-slate-400 mb-6">Muestra un círculo blanco en la pantalla donde tocas.</p>
+                            </div>
+                            <div className="flex space-x-3">
+                              <button onClick={() => setDevToggle('show_touches', '1')} className="flex-1 bg-fuchsia-600/20 hover:bg-fuchsia-600 text-fuchsia-400 hover:text-white py-2 rounded-xl font-bold border border-fuchsia-500/30 transition-all text-sm">ON</button>
+                              <button onClick={() => setDevToggle('show_touches', '0')} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-2 rounded-xl font-bold border border-slate-700 transition-all text-sm">OFF</button>
+                            </div>
+                          </div>
+                          <div className="bg-[#030712]/80 backdrop-blur-md p-6 rounded-2xl border border-fuchsia-900/50 flex flex-col justify-between">
+                            <div>
+                              <h4 className="text-fuchsia-300 font-bold mb-2 flex items-center"><Maximize className="w-4 h-4 mr-2" /> Límites de Diseño</h4>
+                              <p className="text-xs text-slate-400 mb-6">Muestra márgenes y bordes de todos los elementos visuales.</p>
+                            </div>
+                            <div className="flex space-x-3">
+                              <button onClick={() => setDevToggle('debug_layout', '1')} className="flex-1 bg-fuchsia-600/20 hover:bg-fuchsia-600 text-fuchsia-400 hover:text-white py-2 rounded-xl font-bold border border-fuchsia-500/30 transition-all text-sm">ON</button>
+                              <button onClick={() => setDevToggle('debug_layout', '0')} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-2 rounded-xl font-bold border border-slate-700 transition-all text-sm">OFF</button>
+                            </div>
+                          </div>
+                          <div className="bg-[#030712]/80 backdrop-blur-md p-6 rounded-2xl border border-fuchsia-900/50 flex flex-col justify-between">
+                            <div>
+                              <h4 className="text-fuchsia-300 font-bold mb-2 flex items-center"><Activity className="w-4 h-4 mr-2" /> Coordenadas</h4>
+                              <p className="text-xs text-slate-400 mb-6">Muestra una barra con las coordenadas X/Y del puntero en vivo.</p>
+                            </div>
+                            <div className="flex space-x-3">
+                              <button onClick={() => setDevToggle('pointer_location', '1')} className="flex-1 bg-fuchsia-600/20 hover:bg-fuchsia-600 text-fuchsia-400 hover:text-white py-2 rounded-xl font-bold border border-fuchsia-500/30 transition-all text-sm">ON</button>
+                              <button onClick={() => setDevToggle('pointer_location', '0')} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-2 rounded-xl font-bold border border-slate-700 transition-all text-sm">OFF</button>
+                            </div>
+                          </div>
                         </div>
                       </div>
 
-                      <div className="bg-[#030712]/80 backdrop-blur-md p-6 rounded-2xl border border-fuchsia-900/50 flex flex-col justify-between">
-                        <div>
-                          <h4 className="text-fuchsia-300 font-bold mb-2 flex items-center"><Maximize className="w-4 h-4 mr-2" /> Límites de Diseño</h4>
-                          <p className="text-xs text-slate-400 mb-6">Muestra márgenes, contornos y bordes de todos los elementos visuales en pantalla.</p>
-                        </div>
-                        <div className="flex space-x-3">
-                          <button onClick={() => setDevToggle('debug_layout', '1')} className="flex-1 bg-fuchsia-600/20 hover:bg-fuchsia-600 text-fuchsia-400 hover:text-white py-2 rounded-xl font-bold border border-fuchsia-500/30 transition-all text-sm">ON</button>
-                          <button onClick={() => setDevToggle('debug_layout', '0')} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-2 rounded-xl font-bold border border-slate-700 transition-all text-sm">OFF</button>
+                      {/* Section 2: Animaciones */}
+                      <div>
+                        <h4 className="text-lg font-bold text-slate-300 border-b border-slate-700 pb-2 mb-4">Escalas de Animación</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                          <div className="bg-[#030712]/80 backdrop-blur-md p-6 rounded-2xl border border-fuchsia-900/50">
+                            <h4 className="text-fuchsia-300 font-bold mb-4">Escala de Ventana</h4>
+                            <select onChange={(e) => setDevToggle('window_animation_scale', e.target.value)} className="w-full bg-slate-900 text-white p-3 rounded-xl border border-slate-700 focus:border-fuchsia-500 outline-none transition-all">
+                              <option value="1">1x (Normal)</option>
+                              <option value="0.5">0.5x (Rápido)</option>
+                              <option value="2">2x (Lento)</option>
+                              <option value="0">Desactivadas</option>
+                            </select>
+                          </div>
+                          <div className="bg-[#030712]/80 backdrop-blur-md p-6 rounded-2xl border border-fuchsia-900/50">
+                            <h4 className="text-fuchsia-300 font-bold mb-4">Escala de Transición</h4>
+                            <select onChange={(e) => setDevToggle('transition_animation_scale', e.target.value)} className="w-full bg-slate-900 text-white p-3 rounded-xl border border-slate-700 focus:border-fuchsia-500 outline-none transition-all">
+                              <option value="1">1x (Normal)</option>
+                              <option value="0.5">0.5x (Rápido)</option>
+                              <option value="2">2x (Lento)</option>
+                              <option value="0">Desactivadas</option>
+                            </select>
+                          </div>
+                          <div className="bg-[#030712]/80 backdrop-blur-md p-6 rounded-2xl border border-fuchsia-900/50">
+                            <h4 className="text-fuchsia-300 font-bold mb-4">Escala de Duración</h4>
+                            <select onChange={(e) => setDevToggle('animator_duration_scale', e.target.value)} className="w-full bg-slate-900 text-white p-3 rounded-xl border border-slate-700 focus:border-fuchsia-500 outline-none transition-all">
+                              <option value="1">1x (Normal)</option>
+                              <option value="0.5">0.5x (Rápido)</option>
+                              <option value="2">2x (Lento)</option>
+                              <option value="0">Desactivadas</option>
+                            </select>
+                          </div>
                         </div>
                       </div>
 
-                      <div className="bg-[#030712]/80 backdrop-blur-md p-6 rounded-2xl border border-fuchsia-900/50 flex flex-col justify-between">
-                        <div>
-                          <h4 className="text-fuchsia-300 font-bold mb-2 flex items-center"><Activity className="w-4 h-4 mr-2" /> Coordenadas</h4>
-                          <p className="text-xs text-slate-400 mb-6">Muestra una barra superior con las coordenadas X/Y exactas del puntero táctil en vivo.</p>
-                        </div>
-                        <div className="flex space-x-3">
-                          <button onClick={() => setDevToggle('pointer_location', '1')} className="flex-1 bg-fuchsia-600/20 hover:bg-fuchsia-600 text-fuchsia-400 hover:text-white py-2 rounded-xl font-bold border border-fuchsia-500/30 transition-all text-sm">ON</button>
-                          <button onClick={() => setDevToggle('pointer_location', '0')} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-2 rounded-xl font-bold border border-slate-700 transition-all text-sm">OFF</button>
+                      {/* Section 3: Sistema y Depuración */}
+                      <div>
+                        <h4 className="text-lg font-bold text-slate-300 border-b border-slate-700 pb-2 mb-4">Aplicaciones y Depuración de Hardware</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                          <div className="bg-[#030712]/80 backdrop-blur-md p-6 rounded-2xl border border-fuchsia-900/50 flex flex-col justify-between">
+                            <div>
+                              <h4 className="text-fuchsia-300 font-bold mb-2">Pantalla Activa</h4>
+                              <p className="text-xs text-slate-400 mb-6">Mantiene la pantalla encendida mientras el dispositivo carga o está conectado al USB.</p>
+                            </div>
+                            <div className="flex space-x-3">
+                              <button onClick={() => setDevToggle('stay_awake', '7')} className="flex-1 bg-fuchsia-600/20 hover:bg-fuchsia-600 text-fuchsia-400 hover:text-white py-2 rounded-xl font-bold border border-fuchsia-500/30 transition-all text-sm">ON</button>
+                              <button onClick={() => setDevToggle('stay_awake', '0')} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-2 rounded-xl font-bold border border-slate-700 transition-all text-sm">OFF</button>
+                            </div>
+                          </div>
+                          <div className="bg-[#030712]/80 backdrop-blur-md p-6 rounded-2xl border border-fuchsia-900/50 flex flex-col justify-between">
+                            <div>
+                              <h4 className="text-fuchsia-300 font-bold mb-2">Destruir Actividades</h4>
+                              <p className="text-xs text-slate-400 mb-6">Fuerza a cerrar cada actividad tan pronto como el usuario la abandona.</p>
+                            </div>
+                            <div className="flex space-x-3">
+                              <button onClick={() => setDevToggle('dont_keep_activities', '1')} className="flex-1 bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white py-2 rounded-xl font-bold border border-red-500/30 transition-all text-sm">ON</button>
+                              <button onClick={() => setDevToggle('dont_keep_activities', '0')} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-2 rounded-xl font-bold border border-slate-700 transition-all text-sm">OFF</button>
+                            </div>
+                          </div>
+                          <div className="bg-[#030712]/80 backdrop-blur-md p-6 rounded-2xl border border-fuchsia-900/50 flex flex-col justify-between">
+                            <div>
+                              <h4 className="text-fuchsia-300 font-bold mb-2">Modo Estricto / Overdraw</h4>
+                              <p className="text-xs text-slate-400 mb-6">Parpadea la pantalla al usar mucho el hilo principal o muestra superposición de GPU.</p>
+                            </div>
+                            <div className="flex space-x-3">
+                              <button onClick={() => setDevToggle('strict_mode_visual', '1')} className="flex-1 bg-fuchsia-600/20 hover:bg-fuchsia-600 text-fuchsia-400 hover:text-white py-2 rounded-xl font-bold border border-fuchsia-500/30 transition-all text-sm">Strict</button>
+                              <button onClick={() => setDevToggle('gpu_overdraw', 'show')} className="flex-1 bg-fuchsia-600/20 hover:bg-fuchsia-600 text-fuchsia-400 hover:text-white py-2 rounded-xl font-bold border border-fuchsia-500/30 transition-all text-sm">Overdraw</button>
+                              <button onClick={() => { setDevToggle('strict_mode_visual', '0'); setDevToggle('gpu_overdraw', 'false'); }} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-2 rounded-xl font-bold border border-slate-700 transition-all text-sm">OFF</button>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -2588,20 +3278,48 @@ function App() {
                       </div>
                     </div>
 
-                    <div className="bg-[#030712]/80 backdrop-blur-md p-6 rounded-2xl border border-orange-900/50 h-64 relative z-10 w-full">
-                      <h4 className="text-orange-400 font-bold mb-4 flex items-center"><Activity className="w-4 h-4 mr-2" /> Historial de Temperatura (Batería)</h4>
-                      {thermalData.length > 0 ? (
-                        <ResponsiveContainer width="100%" height="100%">
-                          <LineChart data={thermalData}>
-                            <XAxis dataKey="timestamp" tick={false} axisLine={false} />
-                            <YAxis domain={['auto', 'auto']} stroke="#475569" />
-                            <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155' }} />
-                            <Line type="monotone" dataKey="batteryTemp" stroke="#f97316" strokeWidth={3} dot={false} isAnimationActive={false} />
-                          </LineChart>
-                        </ResponsiveContainer>
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-slate-500">Esperando telemetría...</div>
-                      )}
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 relative z-10 w-full">
+                      <div className="lg:col-span-2 bg-[#030712]/80 backdrop-blur-md p-6 rounded-2xl border border-orange-900/50 h-72">
+                        <h4 className="text-orange-400 font-bold mb-4 flex items-center"><Activity className="w-4 h-4 mr-2" /> Historial de Temperatura (Batería)</h4>
+                        {thermalData.length > 0 ? (
+                          <div className="h-48">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <LineChart data={thermalData}>
+                                <XAxis dataKey="timestamp" tick={false} axisLine={false} />
+                                <YAxis domain={['auto', 'auto']} stroke="#475569" />
+                                <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155' }} />
+                                <Line type="monotone" dataKey="batteryTemp" stroke="#f97316" strokeWidth={3} dot={false} isAnimationActive={false} />
+                              </LineChart>
+                            </ResponsiveContainer>
+                          </div>
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-slate-500">Esperando telemetría...</div>
+                        )}
+                      </div>
+
+                      <div className="bg-[#030712]/80 backdrop-blur-md p-6 rounded-2xl border border-orange-900/50 h-72 overflow-y-auto">
+                        <h4 className="text-orange-400 font-bold mb-4 flex items-center"><Cpu className="w-4 h-4 mr-2" /> Procesos de Mayor Impacto</h4>
+                        {thermalData.length > 0 && thermalData[thermalData.length-1].topProcesses?.length > 0 ? (
+                          <div className="space-y-4">
+                            {thermalData[thermalData.length-1].topProcesses.map((proc: any, i: number) => (
+                              <div key={i} className="flex flex-col">
+                                <div className="flex justify-between text-xs mb-1">
+                                  <span className="text-slate-300 truncate max-w-[75%]" title={proc.process}>{proc.process}</span>
+                                  <span className="text-orange-400 font-mono font-bold">{proc.percent}%</span>
+                                </div>
+                                <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                                  <div className="bg-gradient-to-r from-orange-600 to-yellow-400 h-1.5 rounded-full" style={{ width: `${Math.min(100, parseFloat(proc.percent))}%` }}></div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="w-full h-full flex flex-col items-center justify-center text-slate-500 text-sm pb-10">
+                            <Activity className="w-6 h-6 mb-2 animate-spin" />
+                            Escaneando procesos...
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}
@@ -2923,6 +3641,270 @@ function App() {
           </div>
         </div>
       )}
+
+      {/* MEDIA VIEWER MODAL */}
+      <AnimatePresence>
+        {mediaViewer && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+            onClick={() => setMediaViewer(null)}
+          >
+            <div className="relative max-w-5xl w-full max-h-[90vh] flex flex-col items-center justify-center" onClick={e => e.stopPropagation()}>
+              <div className="absolute -top-12 right-0">
+                <button onClick={() => setMediaViewer(null)} className="p-2 text-white bg-red-500/80 hover:bg-red-500 rounded-full transition-all">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+              <div className="w-full flex justify-between items-center mb-4 px-4 py-2 bg-slate-900/80 rounded-xl border border-slate-700">
+                <span className="text-slate-300 font-mono text-sm truncate">{mediaViewer.name}</span>
+              </div>
+              <div className="w-full flex-1 overflow-hidden flex items-center justify-center bg-black/50 rounded-xl border border-slate-700/50 min-h-[300px]">
+                {mediaViewer.type === 'image' ? (
+                  <img src={mediaViewer.url} alt={mediaViewer.name} className="max-w-full max-h-[75vh] object-contain rounded-lg shadow-2xl" />
+                ) : mediaViewer.type === 'video' ? (
+                  <video src={mediaViewer.url} controls autoPlay className="max-w-full max-h-[75vh] rounded-lg shadow-2xl" />
+                ) : (
+                  <iframe src={mediaViewer.url} className="w-full h-[75vh] bg-white rounded-lg shadow-2xl" />
+                )}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* REPORT BUILDER MODAL */}
+      <AnimatePresence>
+        {showReportBuilder && (
+          <motion.div 
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md p-4"
+          >
+            <div className="bg-[#0f172a] border border-cyan-900/50 rounded-2xl w-full max-w-md overflow-hidden shadow-[0_0_50px_rgba(6,182,212,0.15)]">
+              <div className="bg-[#080d1a] p-4 border-b border-cyan-900/50 flex justify-between items-center">
+                <h3 className="text-xl font-bold text-white flex items-center">
+                  <Printer className="w-5 h-5 mr-2 text-cyan-400" /> Constructor de Reporte
+                </h3>
+                <button onClick={() => setShowReportBuilder(false)} className="text-slate-400 hover:text-white transition-colors">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+              <div className="p-6 space-y-4">
+                <p className="text-sm text-slate-400 mb-4">Selecciona los módulos a incluir en tu reporte PDF forense.</p>
+                
+                {Object.keys(reportOptions).map((key) => (
+                  <label key={key} className="flex items-center space-x-3 p-3 bg-slate-800/50 rounded-lg cursor-pointer hover:bg-slate-800 transition-colors border border-slate-700/50">
+                    <input 
+                      type="checkbox" 
+                      checked={(reportOptions as any)[key]} 
+                      onChange={(e) => setReportOptions(prev => ({...prev, [key]: e.target.checked}))}
+                      className="w-5 h-5 rounded border-slate-600 text-cyan-500 focus:ring-cyan-500 focus:ring-offset-slate-900 bg-slate-700"
+                    />
+                    <span className="text-slate-200 font-medium capitalize">
+                      {key === 'device' ? 'Especificaciones del Equipo' :
+                       key === 'battery' ? 'Estado de Batería' :
+                       key === 'apps' ? 'Software y Aplicaciones' :
+                       key === 'thermal' ? 'Perfil Térmico' :
+                       key === 'network' ? 'Configuración de Red' :
+                       key === 'malware' ? 'Resultados Deep Scanner' :
+                       key === 'rootRequirements' ? 'Requisitos de Root' :
+                       'Historial de Pruebas (Audit Log)'}
+                    </span>
+                  </label>
+                ))}
+
+                <button 
+                  onClick={generateReport}
+                  className="w-full mt-4 py-3 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold rounded-xl flex items-center justify-center space-x-2 shadow-lg"
+                >
+                  <FileText className="w-5 h-5" />
+                  <span>Construir y Previsualizar</span>
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* REPORT MODAL */}
+      <AnimatePresence>
+        {reportData && (
+          <motion.div 
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-md p-4 print:bg-white print:p-0"
+          >
+            <div className="relative max-w-4xl w-full max-h-[90vh] bg-white rounded-xl shadow-2xl overflow-y-auto print:max-h-none print:shadow-none print:rounded-none">
+              
+              <div className="sticky top-0 right-0 p-4 bg-slate-100 border-b border-slate-300 flex justify-end space-x-4 print:hidden z-10">
+                <button onClick={() => window.print()} className="px-4 py-2 bg-blue-600 text-white rounded-lg font-bold flex items-center hover:bg-blue-700">
+                  <Printer className="w-4 h-4 mr-2" /> Imprimir / PDF
+                </button>
+                <button onClick={() => setReportData(null)} className="px-4 py-2 bg-slate-300 text-slate-800 rounded-lg font-bold hover:bg-slate-400">
+                  Cerrar
+                </button>
+              </div>
+
+              <div className="p-10 text-slate-900 print:p-0">
+                <div className="flex justify-between items-end border-b-2 border-slate-800 pb-4 mb-8">
+                  <div>
+                    <h1 className="text-4xl font-black uppercase tracking-tight text-slate-900">Reporte de Diagnóstico</h1>
+                    <p className="text-slate-500 font-mono mt-1">ID: {selectedDevice}</p>
+                  </div>
+                  <div className="text-right text-sm font-mono text-slate-500">
+                    <p>Fecha: {new Date(reportData.timestamp).toLocaleString()}</p>
+                    <p>Antigravity Inspector</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-8 mb-8">
+                  {reportData.options.device && (
+                    <div>
+                      <h2 className="text-xl font-bold border-b border-slate-300 pb-2 mb-4 uppercase text-slate-800">1. Dispositivo</h2>
+                      <ul className="space-y-2 font-mono text-sm">
+                        <li><span className="font-bold text-slate-500">Modelo:</span> {reportData.device.model || 'N/A'}</li>
+                        <li><span className="font-bold text-slate-500">Fabricante:</span> {reportData.device.manufacturer || 'N/A'}</li>
+                        <li><span className="font-bold text-slate-500">Android:</span> {reportData.device.androidVersion || 'N/A'} (SDK {reportData.device.sdk})</li>
+                      </ul>
+                    </div>
+                  )}
+                  {reportData.options.battery && (
+                    <div>
+                      <h2 className="text-xl font-bold border-b border-slate-300 pb-2 mb-4 uppercase text-slate-800">2. Batería</h2>
+                      <ul className="space-y-2 font-mono text-sm">
+                        <li><span className="font-bold text-slate-500">Nivel:</span> {reportData.battery.level}%</li>
+                        <li><span className="font-bold text-slate-500">Salud:</span> {reportData.battery.health}</li>
+                        <li><span className="font-bold text-slate-500">Temperatura:</span> {reportData.battery.temperature}°C</li>
+                      </ul>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-8 mb-8">
+                  {reportData.options.apps && (
+                    <div>
+                      <h2 className="text-xl font-bold border-b border-slate-300 pb-2 mb-4 uppercase text-slate-800">3. Software & Apps</h2>
+                      <ul className="space-y-2 font-mono text-sm">
+                        <li><span className="font-bold text-slate-500">Total Instaladas:</span> {reportData.apps.installed}</li>
+                        <li><span className="font-bold text-slate-500">De Sistema:</span> {reportData.apps.system}</li>
+                        <li><span className="font-bold text-slate-500">De Terceros:</span> {reportData.apps.thirdParty}</li>
+                      </ul>
+                    </div>
+                  )}
+                  {reportData.options.thermal && reportData.options.network && (
+                    <div>
+                      <h2 className="text-xl font-bold border-b border-slate-300 pb-2 mb-4 uppercase text-slate-800">4. Telemetría y Red</h2>
+                      <ul className="space-y-2 font-mono text-sm">
+                        <li><span className="font-bold text-slate-500">Uso CPU Promedio:</span> {reportData.thermal.cpuLoad}%</li>
+                        <li><span className="font-bold text-slate-500">Dirección IP (Ruta):</span> {reportData.network.ip}</li>
+                      </ul>
+                    </div>
+                  )}
+                </div>
+
+                {reportData.options.apps && (
+                  <div>
+                    <h2 className="text-xl font-bold border-b border-slate-300 pb-2 mb-4 uppercase text-slate-800">5. Amenazas / Bloatware Encontrado ({reportData.apps.bloatwareFound?.length || 0})</h2>
+                    {reportData.apps.bloatwareFound && reportData.apps.bloatwareFound.length > 0 ? (
+                      <ul className="list-disc pl-5 font-mono text-sm space-y-1 text-red-700">
+                        {reportData.apps.bloatwareFound.map((b: string, i: number) => <li key={i}>{b}</li>)}
+                      </ul>
+                    ) : (
+                      <p className="font-mono text-sm text-green-700">No se encontraron amenazas conocidas en el escaneo rápido.</p>
+                    )}
+                  </div>
+                )}
+
+                {reportData.options.malware && reportData.malwareScanResults && (
+                  <div className="mb-8">
+                    <h2 className="text-xl font-bold border-b border-slate-300 pb-2 mb-4 uppercase text-slate-800">Resultados Deep Scanner (Malware / Amenazas Avanzadas)</h2>
+                    {reportData.malwareScanResults.length > 0 ? (
+                      <ul className="list-disc pl-5 font-mono text-sm space-y-1 text-red-700">
+                        {reportData.malwareScanResults.map((m: any, i: number) => (
+                           <li key={i}>{m.packageName} <span className="font-bold">({m.riskLevel})</span> - {m.description}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="font-mono text-sm text-green-700">No se encontraron amenazas avanzadas o no se ejecutó el Deep Scanner en esta sesión.</p>
+                    )}
+                  </div>
+                )}
+
+                {reportData.options.rootRequirements && reportData.rootRequirements && (
+                  <div className="mb-8">
+                    <h2 className="text-xl font-bold border-b border-slate-300 pb-2 mb-4 uppercase text-slate-800">Requisitos para Root</h2>
+                    <ul className="space-y-2 font-mono text-sm mb-4">
+                      <li><span className="font-bold text-slate-500">Método Sugerido:</span> {reportData.rootRequirements.method}</li>
+                      <li><span className="font-bold text-slate-500">Firmware Actual:</span> {reportData.rootRequirements.currentBuildFirmware}</li>
+                      <li><span className="font-bold text-slate-500">Archivos Necesarios:</span> {reportData.rootRequirements.requiredFiles.join(', ')}</li>
+                      <li><span className="font-bold text-slate-500">Notas:</span> {reportData.rootRequirements.firmwareNotes}</li>
+                    </ul>
+
+                    {reportData.rootRequirements.instructions && reportData.rootRequirements.instructions.length > 0 && (
+                      <div className="mt-4">
+                        <h3 className="font-bold text-slate-700 text-sm mb-2">Instrucciones Exactas:</h3>
+                        <ol className="list-decimal pl-5 font-mono text-xs space-y-1 text-slate-600">
+                          {reportData.rootRequirements.instructions.map((inst: string, idx: number) => (
+                            <li key={idx}>{inst.replace(/^\d+\.\s*/, '')}</li>
+                          ))}
+                        </ol>
+                      </div>
+                    )}
+
+                    {reportData.rootRequirements.links && reportData.rootRequirements.links.length > 0 && (
+                      <div className="mt-4">
+                        <h3 className="font-bold text-slate-700 text-sm mb-2">Herramientas Oficiales:</h3>
+                        <div className="flex flex-wrap gap-2 font-mono text-xs">
+                          {reportData.rootRequirements.links.map((link: any, idx: number) => (
+                            <a key={idx} href={link.url} target="_blank" rel="noopener noreferrer" className="px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors">
+                              {link.name}
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {reportData.options.auditLog && (
+                  <div className="mt-8 break-before-page">
+                    <h2 className="text-xl font-bold border-b border-slate-300 pb-2 mb-4 uppercase text-slate-800">Historial de Pruebas y Diagnósticos (Audit Log)</h2>
+                    {reportData.auditLog && reportData.auditLog.length > 0 ? (
+                      <table className="w-full text-left border-collapse text-sm">
+                        <thead>
+                          <tr className="border-b-2 border-slate-300">
+                            <th className="py-2 text-slate-600">Hora</th>
+                            <th className="py-2 text-slate-600">Módulo / Herramienta</th>
+                            <th className="py-2 text-slate-600">Acción Registrada</th>
+                            <th className="py-2 text-slate-600">Resultado</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {reportData.auditLog.map((log: any, i: number) => (
+                            <tr key={i} className="border-b border-slate-200 font-mono text-xs text-slate-700">
+                              <td className="py-2 pr-2">{new Date(log.timestamp).toLocaleTimeString()}</td>
+                              <td className="py-2 pr-2 font-bold">{log.module}</td>
+                              <td className="py-2 pr-2">{log.action}</td>
+                              <td className="py-2">{log.result}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    ) : (
+                      <p className="font-mono text-sm text-slate-500">No se registraron pruebas durante esta sesión.</p>
+                    )}
+                  </div>
+                )}
+
+                <div className="mt-16 pt-8 border-t border-slate-300 text-center text-xs text-slate-500">
+                  <p>Documento confidencial generado automáticamente por Android Diagnostic Tool.</p>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

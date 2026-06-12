@@ -26,3 +26,7 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+# TypeScript build files
+*.tsbuildinfo
+backend/index.js
