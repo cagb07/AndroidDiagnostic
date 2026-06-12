@@ -1,4 +1,4 @@
-# Android Diagnostic Platform V3.0
+Android Diagnostic Platform V3.0
 
 MoniRemo es una poderosa plataforma web de diagnóstico, control remoto y análisis avanzado para dispositivos Android, construida sobre ADB (Android Debug Bridge). Está diseñada para ofrecer a desarrolladores, técnicos y entusiastas un control sin precedentes sobre el hardware y el software del dispositivo desde una interfaz moderna e interactiva en el navegador.
 
