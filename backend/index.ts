@@ -1136,6 +1136,15 @@ app.post('/api/device/:id/bypass/bruteforce/start', async (req, res) => {
   // Start background loop
   (async () => {
     let attempts = 0;
+    
+    // Initial wake up and swipe up to reveal PIN pad
+    try {
+      await execAsync(`${ADB_PATH} -s ${id} shell input keyevent 26`);
+      await new Promise(r => setTimeout(r, 1000));
+      await execAsync(`${ADB_PATH} -s ${id} shell input swipe 500 1500 500 500`);
+      await new Promise(r => setTimeout(r, 500));
+    } catch(e) {}
+
     for (let current = startPin; current <= endPin; current++) {
       if (!activeBruteForceJobs[id]?.active) break; // Check if stopped
 
@@ -1152,9 +1161,9 @@ app.post('/api/device/:id/bypass/bruteforce/start', async (req, res) => {
         // Wait a moment for Android to process the PIN and hide the lockscreen if correct
         await new Promise(r => setTimeout(r, 1000));
 
-        // Check if device is now unlocked
-        const { stdout: windowDump } = await execAsync(`${ADB_PATH} -s ${id} shell dumpsys window policy`);
-        const isLocked = windowDump.includes('isKeyguardLocked=true') || windowDump.includes('mShowingLockscreen=true');
+        // Check if device is now unlocked using modern Android properties
+        const { stdout: activityDump } = await execAsync(`${ADB_PATH} -s ${id} shell dumpsys activity`);
+        const isLocked = activityDump.includes('mKeyguardShowing=true') || activityDump.includes('isKeyguardLocked=true');
         
         if (!isLocked) {
            activeBruteForceJobs[id].active = false;
@@ -1599,6 +1608,34 @@ app.post('/api/device/:id/processes/kill', async (req, res) => {
   }
 });
 
+app.post('/api/device/:id/stress', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { type, action } = req.body;
+    console.log(`[STRESS TEST] Ejecutando acción: ${action} sobre el componente: ${type} en el dispositivo: ${id}`);
+    
+    if (action === 'start') {
+      if (type === 'cpu') {
+        await execAsync(`${ADB_PATH} -s ${id} shell "nohup sh -c 'for i in 1 2 3 4 5 6 7 8; do md5sum /dev/urandom >/dev/null 2>&1 & done' >/dev/null 2>&1 &"`);
+      } else if (type === 'gpu') {
+        await execAsync(`${ADB_PATH} -s ${id} shell am start -a android.intent.action.VIEW -d "https://webglsamples.org/aquarium/aquarium.html"`);
+      } else if (type === 'video') {
+        await execAsync(`${ADB_PATH} -s ${id} shell am start -a android.intent.action.VIEW -d "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4" -t "video/mp4"`);
+      }
+    } else if (action === 'stop') {
+      if (type === 'cpu') {
+        await execAsync(`${ADB_PATH} -s ${id} shell "pkill -f md5sum || true"`);
+      } else if (type === 'gpu' || type === 'video') {
+        await execAsync(`${ADB_PATH} -s ${id} shell am start -W -c android.intent.category.HOME -a android.intent.action.MAIN`);
+      }
+    }
+    
+    res.json({ success: true, message: `Prueba de estrés de ${type} ${action === 'start' ? 'iniciada' : 'detenida'}.` });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ==========================================
 // V3.0 - Ultimate Tech HUD Endpoints
 // ==========================================
@@ -1904,8 +1941,9 @@ app.post('/api/device/:id/spoof', async (req, res) => {
     const { type, value } = req.body;
     
     if (type === 'battery_level') {
+      await execAsync(`${ADB_PATH} -s ${id} shell dumpsys battery unplug`);
       await execAsync(`${ADB_PATH} -s ${id} shell dumpsys battery set level ${value}`);
-      return res.json({ success: true, message: `Batería forzada a ${value}%` });
+      return res.json({ success: true, message: `Batería forzada a ${value}% y desconectada` });
     }
     
     if (type === 'battery_unplug') {
@@ -2090,6 +2128,103 @@ app.get('/api/device/:id/report', async (req, res) => {
     } catch(e) {}
 
     return res.json({ success: true, data: reportData });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ==========================================
+// REPAIR & TEST TOOLS ENDPOINTS
+// ==========================================
+
+app.get('/api/device/:id/apps', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { stdout: thirdParty } = await execAsync(`${ADB_PATH} -s ${id} shell pm list packages -3`);
+    const { stdout: system } = await execAsync(`${ADB_PATH} -s ${id} shell pm list packages -s`);
+    
+    const parsePackages = (output: string, isSystem: boolean) => {
+      return output.split('\n')
+        .map(line => line.replace('package:', '').trim())
+        .filter(pkg => pkg)
+        .map(pkg => ({ packageName: pkg, isSystem }));
+    };
+
+    res.json({ success: true, apps: [...parsePackages(thirdParty, false), ...parsePackages(system, true)] });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/device/:id/apps/manage', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { packageName, action } = req.body;
+    let cmd = '';
+
+    if (action === 'disable') cmd = `pm disable-user --user 0 ${packageName}`;
+    else if (action === 'enable') cmd = `pm enable ${packageName}`;
+    else if (action === 'uninstall') cmd = `pm uninstall -k --user 0 ${packageName}`;
+    else if (action === 'clear') cmd = `pm clear ${packageName}`;
+    else return res.status(400).json({ success: false, error: 'Acción no válida' });
+
+    const { stdout, stderr } = await execAsync(`${ADB_PATH} -s ${id} shell ${cmd}`);
+    res.json({ success: true, message: `Acción '${action}' ejecutada en ${packageName}.`, output: stdout || stderr });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/device/:id/hardware/touch', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { enable } = req.body;
+    const val = enable ? '1' : '0';
+    await execAsync(`${ADB_PATH} -s ${id} shell settings put system pointer_location ${val}`);
+    res.json({ success: true, message: `Prueba táctil ${enable ? 'activada' : 'desactivada'}.` });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/device/:id/network/ping', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { stdout } = await execAsync(`${ADB_PATH} -s ${id} shell ping -c 4 8.8.8.8`);
+    res.json({ success: true, output: stdout });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/device/:id/network/reset', async (req, res) => {
+  try {
+    const { id } = req.params;
+    // Toggle airplane mode
+    await execAsync(`${ADB_PATH} -s ${id} shell cmd connectivity airplane-mode enable`);
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    await execAsync(`${ADB_PATH} -s ${id} shell cmd connectivity airplane-mode disable`);
+    res.json({ success: true, message: 'Ciclo de red completado (Modo Avión activado y desactivado).' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/device/:id/logs/crash', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { stdout } = await execAsync(`${ADB_PATH} -s ${id} shell logcat -d *:E -t 500`);
+    res.json({ success: true, logs: stdout });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/device/:id/hardware/vibrate', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await execAsync(`${ADB_PATH} -s ${id} shell cmd vibrator vibrate 1000`);
+    res.json({ success: true, message: 'Comando de vibración enviado.' });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
