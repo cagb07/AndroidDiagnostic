@@ -1,3 +1,5 @@
+<img width="1016" height="504" alt="image" src="https://github.com/user-attachments/assets/e10defbf-8c40-4237-9e8f-8f2145f89dce" />
+
 Android Diagnostic Platform V3.0
 
 Es una poderosa plataforma web de diagnóstico, control remoto y análisis avanzado para dispositivos Android, construida sobre ADB (Android Debug Bridge). Está diseñada para ofrecer a desarrolladores, técnicos y entusiastas un control sin precedentes sobre el hardware y el software del dispositivo desde una interfaz moderna e interactiva en el navegador.
