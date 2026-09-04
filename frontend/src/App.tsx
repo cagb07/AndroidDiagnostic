@@ -425,6 +425,16 @@ function App() {
   };
 
   const handleOdinPrintPit = async () => {
+    if (!odinDeviceDetected) {
+      if (selectedDevice) {
+        if (window.confirm(`El dispositivo Samsung (${selectedDevice}) está encendido en modo Android normal (ADB).\n\nPara leer la tabla de particiones PIT, el teléfono debe estar en 'Modo Descarga' (Download Mode / Odin Mode).\n\n¿Deseas reiniciarlo ahora a Modo Descarga?`)) {
+          handleOdinRebootDownload();
+        }
+        return;
+      }
+      addToast('No se detectó dispositivo en Modo Descarga. Conecta tu Samsung en Modo Descarga.', 'warning');
+      return;
+    }
     setIsLoadingPit(true);
     try {
       const res = await axios.get(`${API_BASE}/odin/print-pit`);
@@ -436,13 +446,25 @@ function App() {
         addToast(res.data.error, 'error');
       }
     } catch (e: any) {
-      addToast(e.response?.data?.error || 'Error al leer PIT', 'error');
+      const errTxt = e.response?.data?.error || 'Error al leer PIT';
+      addToast(errTxt, 'error');
+      setOdinLogs(prev => prev + `\n[${new Date().toLocaleTimeString()}] ERROR PIT: ${errTxt}`);
     } finally {
       setIsLoadingPit(false);
     }
   };
 
   const handleOdinDownloadPit = async () => {
+    if (!odinDeviceDetected) {
+      if (selectedDevice) {
+        if (window.confirm(`El dispositivo Samsung (${selectedDevice}) está encendido en modo Android normal (ADB).\n\nPara descargar la tabla de particiones PIT, el teléfono debe estar en 'Modo Descarga' (Download Mode / Odin Mode).\n\n¿Deseas reiniciarlo ahora a Modo Descarga?`)) {
+          handleOdinRebootDownload();
+        }
+        return;
+      }
+      addToast('No se detectó dispositivo en Modo Descarga. Conecta tu Samsung en Modo Descarga.', 'warning');
+      return;
+    }
     setIsLoadingPit(true);
     try {
       const res = await axios.post(`${API_BASE}/odin/download-pit`);
@@ -453,7 +475,9 @@ function App() {
         addToast(res.data.error || 'Error al descargar PIT', 'error');
       }
     } catch (e: any) {
-      addToast(e.response?.data?.error || 'Error al descargar PIT', 'error');
+      const errTxt = e.response?.data?.error || 'Error al descargar PIT';
+      addToast(errTxt, 'error');
+      setOdinLogs(prev => prev + `\n[${new Date().toLocaleTimeString()}] ERROR PIT: ${errTxt}`);
     } finally {
       setIsLoadingPit(false);
     }
@@ -2801,8 +2825,36 @@ function App() {
                             </div>
                           </div>
 
+                          {/* Device State Notice */}
+                          {odinDeviceDetected === true ? (
+                            <div className="mt-4 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs flex items-center space-x-2.5">
+                              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                              <span>Dispositivo Samsung en <strong>Modo Descarga (Odin Mode)</strong> detectado y listo para operaciones de PIT y flasheo.</span>
+                            </div>
+                          ) : selectedDevice ? (
+                            <div className="mt-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs flex items-center justify-between">
+                              <div className="flex items-center space-x-2.5">
+                                <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                                <span>Dispositivo <strong className="text-white">{selectedDevice}</strong> conectado en modo Android normal (ADB). Para leer PIT o flashear, pulsa <strong>Reiniciar a Download</strong>.</span>
+                              </div>
+                              <button
+                                onClick={handleOdinRebootDownload}
+                                disabled={isOdinRebooting}
+                                className="ml-3 px-3 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 rounded-lg font-semibold text-[11px] shrink-0 transition-all flex items-center space-x-1"
+                              >
+                                <Zap className="w-3 h-3 text-amber-400" />
+                                <span>{isOdinRebooting ? 'Reiniciando...' : 'Reiniciar Ahora'}</span>
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="mt-4 p-3 rounded-xl bg-slate-800/40 border border-slate-700/50 text-slate-400 text-xs flex items-center space-x-2.5">
+                              <Info className="w-4 h-4 text-cyan-400 shrink-0" />
+                              <span>Para usar el flasheador o inspeccionar particiones, conecta un dispositivo Samsung en <strong>Modo Descarga</strong> (Odin).</span>
+                            </div>
+                          )}
+
                           {/* Quick Actions Bar */}
-                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-6 border-t border-slate-800">
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-4 border-t border-slate-800">
                             <button
                               onClick={handleOdinDetect}
                               disabled={isOdinDetecting}
