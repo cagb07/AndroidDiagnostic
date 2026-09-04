@@ -3182,6 +3182,7 @@ app.post('/api/imei/validate', async (req, res) => {
 // ==========================================
 
 // Check status of Heimdall & OdinMac.app
+// Check status of Heimdall & OdinMac.app
 app.get('/api/odin/status', async (req, res) => {
   try {
     let version = '';
@@ -3195,12 +3196,21 @@ app.get('/api/odin/status', async (req, res) => {
     }
 
     const odinMacInstalled = fs.existsSync('/Applications/OdinMac.app');
+    const isIntel = process.arch === 'x64';
+    const odinMacCompatible = odinMacInstalled && !isIntel;
+    const odinMacReason = isIntel
+      ? 'OdinMac.app requiere procesador Apple Silicon (M1/M2/M3/M4 ARM64). En Mac Intel (x86_64) macOS no permite ejecutar este binario.'
+      : null;
+
     res.json({
       success: true,
       available,
       version,
       heimdallPath: HEIMDALL_PATH,
       odinMacInstalled,
+      odinMacCompatible,
+      odinMacReason,
+      systemArch: process.arch,
       odinMacPath: odinMacInstalled ? '/Applications/OdinMac.app' : null
     });
   } catch (err: any) {
@@ -3314,16 +3324,33 @@ app.get('/api/odin/print-pit', async (req, res) => {
 // Launch native OdinMac application on macOS
 app.post('/api/odin/launch-app', async (req, res) => {
   try {
-    if (fs.existsSync('/Applications/OdinMac.app')) {
+    if (!fs.existsSync('/Applications/OdinMac.app')) {
+      return res.status(404).json({
+        success: false,
+        error: 'OdinMac.app no está instalado en /Applications.'
+      });
+    }
+
+    if (process.arch === 'x64') {
+      return res.status(400).json({
+        success: false,
+        error: 'Incompatibilidad de Procesador: OdinMac.app fue compilado para Apple Silicon (ARM64). Tu equipo es una Mac Intel (x86_64), por lo que macOS no permite ejecutar este binario (bad CPU type / kLSIncompatibleSystemVersionErr). Utiliza el motor de flasheo Odin integrado en la plataforma.'
+      });
+    }
+
+    try {
       await execAsync('open /Applications/OdinMac.app');
       return res.json({ success: true, message: 'OdinMac.app abierto correctamente en macOS' });
+    } catch (openErr: any) {
+      return res.status(400).json({
+        success: false,
+        error: `No se pudo iniciar OdinMac.app: ${openErr.stderr || openErr.message}`
+      });
     }
-    await execAsync('open -a OdinMac');
-    res.json({ success: true, message: 'OdinMac abierto en macOS' });
   } catch (err: any) {
-    res.status(500).json({
+    res.status(400).json({
       success: false,
-      error: 'No se pudo iniciar OdinMac.app. Verifica que esté en /Applications: ' + err.message
+      error: 'Error al intentar iniciar OdinMac: ' + err.message
     });
   }
 });

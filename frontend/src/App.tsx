@@ -2900,11 +2900,20 @@ function App() {
                               {odinStatus?.odinMacInstalled && (
                                 <button
                                   onClick={handleOdinLaunchApp}
-                                  className="flex items-center space-x-1.5 px-3 py-1.5 bg-indigo-950/60 hover:bg-indigo-900/60 border border-indigo-500/40 text-indigo-300 hover:text-white rounded-xl transition-all shadow-md"
-                                  title="Lanzar aplicación nativa OdinMac en macOS"
+                                  className={`flex items-center space-x-1.5 px-3 py-1.5 border rounded-xl transition-all shadow-md ${
+                                    odinStatus?.odinMacCompatible === false
+                                      ? 'bg-slate-800/80 border-slate-700 text-slate-400 hover:text-amber-300'
+                                      : 'bg-indigo-950/60 hover:bg-indigo-900/60 border-indigo-500/40 text-indigo-300 hover:text-white'
+                                  }`}
+                                  title={odinStatus?.odinMacReason || "Lanzar aplicación nativa OdinMac en macOS"}
                                 >
                                   <MonitorPlay className="w-3.5 h-3.5 text-indigo-400" />
                                   <span>Abrir OdinMac Desktop</span>
+                                  {odinStatus?.odinMacCompatible === false && (
+                                    <span className="text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-1.5 py-0.5 rounded uppercase font-bold">
+                                      Solo ARM64
+                                    </span>
+                                  )}
                                 </button>
                               )}
                             </div>
@@ -4755,8 +4764,8 @@ function App() {
                           <div className="lg:col-span-2 bg-[#030712]/80 backdrop-blur-md p-6 rounded-2xl border border-orange-900/50 h-72">
                             <h4 className="text-orange-400 font-bold mb-4 flex items-center"><Activity className="w-4 h-4 mr-2" /> Historial de Temperatura (Batería)</h4>
                             {thermalData.length > 0 ? (
-                              <div className="h-48">
-                                <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={180}>
+                              <div className="w-full h-48 min-w-0" style={{ width: '100%', height: '192px', minWidth: 0 }}>
+                                <ResponsiveContainer width="100%" height={180} minWidth={0} minHeight={180}>
                                   <LineChart data={thermalData}>
                                     <XAxis dataKey="timestamp" tick={false} axisLine={false} />
                                     <YAxis domain={['auto', 'auto']} stroke="#475569" />
