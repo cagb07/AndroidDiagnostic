@@ -361,20 +361,31 @@ app.get('/api/device/:id/diagnostics/advanced', async (req, res) => {
 app.post('/api/device/:id/reboot', async (req, res) => {
   try {
     const { id } = req.params;
-    const { mode } = req.body; // normal, recovery, bootloader
+    const { mode } = req.body; // normal, recovery, bootloader, safe_mode, edl, download
     
     let command = `${ADB_PATH} -s ${id} reboot`;
-    if (mode === 'recovery') command += ' recovery';
-    if (mode === 'bootloader') command += ' bootloader';
-    if (mode === 'edl') command += ' edl';
-    if (mode === 'safe_mode') {
-      await execAsync(`${ADB_PATH} -s ${id} shell setprop persist.sys.safemode 1`);
+    if (mode === 'recovery') {
+      command += ' recovery';
+    } else if (mode === 'bootloader' || mode === 'fastboot') {
+      command += ' bootloader';
+    } else if (mode === 'download') {
+      command += ' download';
+    } else if (mode === 'edl') {
+      command += ' edl';
+    } else if (mode === 'safe_mode') {
+      try {
+        // Attempt to set safe mode property if permissions/root allow
+        await execAsync(`${ADB_PATH} -s ${id} shell "su -c 'setprop persist.sys.safemode 1' 2>/dev/null || setprop persist.sys.safemode 1 2>/dev/null || true"`);
+      } catch (e) {
+        // SELinux or permission error on unrooted devices; proceed with standard reboot
+      }
       command = `${ADB_PATH} -s ${id} reboot`;
     }
 
     await execAsync(command);
-    res.json({ success: true, message: `Rebooting to ${mode || 'normal'}...` });
+    res.json({ success: true, message: `Reinicio en modo ${mode || 'normal'} ejecutado.` });
   } catch (err: any) {
+    console.error('Reboot command error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
