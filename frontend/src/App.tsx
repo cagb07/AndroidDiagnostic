@@ -4466,7 +4466,7 @@ function App() {
                   </div>
                   <div className="text-right text-sm font-mono text-slate-500">
                     <p>Fecha: {new Date(reportData.timestamp).toLocaleString()}</p>
-                    <p>Antigravity Inspector</p>
+                    <p>Inspector de Diagnóstico</p>
                   </div>
                 </div>
 
@@ -4841,7 +4841,7 @@ function App() {
                       <h1 className="text-2xl font-black text-slate-900 tracking-tight uppercase">Orden de Peritaje & Diagnóstico Técnico</h1>
                     </div>
                     <p className="text-xs text-slate-600 mt-1">Laboratorio de Soporte y Diagnóstico Avanzado de Dispositivos Móviles</p>
-                    <p className="text-xs font-mono text-slate-500 mt-0.5">Sistema: Antigravity Android Diagnostic HUD V3.0</p>
+                    <p className="text-xs font-mono text-slate-500 mt-0.5">Sistema: Android Diagnostic HUD V3.0</p>
                   </div>
                   <div className="text-right font-mono text-xs text-slate-700 space-y-1">
                     <div className="font-bold text-sm text-slate-900">FOLIO: <span className="text-blue-700">ORD-{selectedDevice ? selectedDevice.slice(-6).toUpperCase() : '000000'}</span></div>
@@ -4990,7 +4990,7 @@ function App() {
                   <div className="text-center">
                     <div className="h-16 border-b border-dashed border-slate-400 mb-2"></div>
                     <div className="text-xs font-bold text-slate-900 uppercase">Firma del Especialista Técnico</div>
-                    <div className="text-[10px] text-slate-500">Antigravity Certified Diagnostic Lab</div>
+                    <div className="text-[10px] text-slate-500">Laboratorio Técnico Certificado</div>
                   </div>
                   <div className="text-center">
                     <div className="h-16 border-b border-dashed border-slate-400 mb-2"></div>
