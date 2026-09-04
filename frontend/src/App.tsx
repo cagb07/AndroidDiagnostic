@@ -206,6 +206,42 @@ function App() {
   const [odinPitOutput, setOdinPitOutput] = useState<string | null>(null);
   const [isLoadingPit, setIsLoadingPit] = useState(false);
 
+  // Samsung Firmware ZIP Auto-Extractor & Compatibility State
+  const [firmwareZipFile, setFirmwareZipFile] = useState<File | null>(null);
+  const [isUploadingZip, setIsUploadingZip] = useState(false);
+  const [isDraggingZip, setIsDraggingZip] = useState(false);
+  const [zipUploadProgress, setZipUploadProgress] = useState(0);
+  const [extractedSession, setExtractedSession] = useState<{
+    sessionId: string;
+    sessionDir: string;
+    firmware: any;
+    device: any;
+    compatibility: {
+      modelMatch: boolean | null;
+      modelMessage: string;
+      binaryMatch: boolean | null;
+      binaryMessage: string;
+      cscMessage: string;
+      verdict: {
+        status: 'ok' | 'warning' | 'danger';
+        title: string;
+        message: string;
+        canFlash: boolean;
+      };
+    };
+    files: {
+      bl: { name: string; path: string; size: number } | null;
+      ap: { name: string; path: string; size: number } | null;
+      cp: { name: string; path: string; size: number } | null;
+      csc: { name: string; path: string; size: number } | null;
+      home_csc: { name: string; path: string; size: number } | null;
+      userdata: { name: string; path: string; size: number } | null;
+      pit: { name: string; path: string; size: number } | null;
+    };
+  } | null>(null);
+  const [chosenCscChoice, setChosenCscChoice] = useState<'clean' | 'home'>('home');
+  const [isFlashingExtracted, setIsFlashingExtracted] = useState(false);
+
   const logAction = (module: string, action: string, result: string) => {
     setAuditLog(prev => [...prev, {
       timestamp: new Date().toISOString(),
@@ -619,6 +655,127 @@ function App() {
     } finally {
       setIsOdinFlashing(false);
     }
+  };
+
+  const handleZipFileSelected = async (file: File) => {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.zip')) {
+      addToast('Por favor selecciona un archivo comprimido .ZIP de firmware Samsung', 'warning');
+      return;
+    }
+
+    setFirmwareZipFile(file);
+    setIsUploadingZip(true);
+    setZipUploadProgress(0);
+    setOdinLogs(prev => prev + `\n\n===============================\n[${new Date().toLocaleTimeString()}] SUBIENDO Y DESCOMPRIMIENDO FIRMWARE ZIP: ${file.name}...\n===============================`);
+    addToast('Subiendo y analizando paquete de firmware...', 'info');
+
+    const formData = new FormData();
+    formData.append('firmwareZip', file);
+    if (selectedDevice) {
+      formData.append('deviceId', selectedDevice);
+    }
+
+    try {
+      const res = await axios.post(`${API_BASE}/odin/upload-firmware-zip`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (progressEvent) => {
+          if (progressEvent.total) {
+            const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            setZipUploadProgress(percent);
+          }
+        },
+        timeout: 900000 // 15 min
+      });
+
+      if (res.data.success) {
+        setExtractedSession(res.data);
+        if (res.data.files?.home_csc) {
+          setChosenCscChoice('home');
+        } else {
+          setChosenCscChoice('clean');
+        }
+
+        const verdict = res.data.compatibility?.verdict;
+        if (verdict?.status === 'ok') {
+          addToast('Firmware verificado: ¡100% Compatible y Seguro!', 'success');
+        } else if (verdict?.status === 'warning') {
+          addToast(verdict.title, 'warning');
+        } else {
+          addToast(verdict?.title || 'Incompatibilidad detectada', 'error');
+        }
+
+        setOdinLogs(prev => prev + `\n[AUDITORÍA DE COMPATIBILIDAD]\nDictamen: ${verdict?.title}\nDetalles: ${verdict?.message}\n` +
+          `Archivos clasificados:\n` +
+          ` • BL (Bootloader): ${res.data.files?.bl?.name || 'No detectado'}\n` +
+          ` • AP (Sistema/PDA): ${res.data.files?.ap?.name || 'No detectado'}\n` +
+          ` • CP (Módem/Radio): ${res.data.files?.cp?.name || 'No detectado'}\n` +
+          ` • CSC (Formateo): ${res.data.files?.csc?.name || 'No detectado'}\n` +
+          ` • HOME_CSC (Sin borrar): ${res.data.files?.home_csc?.name || 'No detectado'}\n` +
+          ` • PIT: ${res.data.files?.pit?.name || 'No incluido en el ZIP'}`
+        );
+      } else {
+        addToast(res.data.error || 'Error al descomprimir y auditar firmware', 'error');
+      }
+    } catch (e: any) {
+      const errMsg = e.response?.data?.error || e.message;
+      addToast(`Error al procesar firmware ZIP: ${errMsg}`, 'error');
+      setOdinLogs(prev => prev + `\n[ERROR FIRMWARE ZIP] ${errMsg}`);
+    } finally {
+      setIsUploadingZip(false);
+    }
+  };
+
+  const handleFlashExtractedSession = async () => {
+    if (!extractedSession) {
+      addToast('No hay ninguna sesión de firmware extraída activa', 'error');
+      return;
+    }
+
+    const { compatibility, sessionId } = extractedSession;
+    if (compatibility?.verdict && !compatibility.verdict.canFlash) {
+      const proceed = await customConfirm(
+        `ATENCIÓN: Se detectaron riesgos graves de incompatibilidad:\n\n${compatibility.verdict.message}\n\nFlashear este archivo puede brickear tu dispositivo Samsung. ¿Deseas forzar el flasheo de todos modos?`
+      );
+      if (!proceed) return;
+    }
+
+    setIsFlashingExtracted(true);
+    setOdinLogs(prev => prev + `\n\n===============================\n[${new Date().toLocaleTimeString()}] INICIANDO FLASHEO DE FIRMWARE VERIFICADO (MODO CSC: ${chosenCscChoice === 'home' ? 'HOME_CSC (Sin borrar datos)' : 'CSC (Formateo limpio)'})...\n===============================`);
+    addToast('Iniciando flasheo de firmware con Heimdall...', 'info');
+
+    try {
+      const res = await axios.post(`${API_BASE}/odin/flash-extracted-session`, {
+        sessionId,
+        cscChoice: chosenCscChoice,
+        reboot: odinOptions.reboot,
+        repartition: odinOptions.repartition
+      }, {
+        timeout: 1200000 // 20 min
+      });
+
+      if (res.data.success) {
+        addToast('¡Flasheo de Firmware Samsung completado con éxito!', 'success');
+        setOdinLogs(prev => prev + '\n' + res.data.logs);
+      } else {
+        addToast('Fallo en el flasheo del firmware verificado', 'error');
+        setOdinLogs(prev => prev + '\n' + res.data.logs);
+      }
+    } catch (e: any) {
+      const errMsg = e.response?.data?.error || e.message;
+      const errLogs = e.response?.data?.logs || '';
+      addToast(`Error al flashear: ${errMsg}`, 'error');
+      setOdinLogs(prev => prev + `\n[ERROR FLASHEO] ${errMsg}\n` + errLogs);
+    } finally {
+      setIsFlashingExtracted(false);
+    }
+  };
+
+  const handleClearExtractedSession = () => {
+    setExtractedSession(null);
+    setFirmwareZipFile(null);
+    setZipUploadProgress(0);
+    addToast('Sesión de firmware restablecida', 'info');
   };
 
   const openReportBuilder = () => {
@@ -2986,6 +3143,445 @@ function App() {
                               <span>Descargar Archivo PIT</span>
                             </button>
                           </div>
+                        </div>
+
+                        {/* CARGA AUTOMÁTICA DE FIRMWARE SAMSUNG (ZIP COMPLETO) Y AUDITORÍA DE COMPATIBILIDAD */}
+                        <div className="bg-slate-900/60 border border-sky-500/30 rounded-3xl p-6 sm:p-8 backdrop-blur-xl shadow-2xl space-y-6 relative overflow-hidden">
+                          <div className="absolute top-0 right-0 w-80 h-80 bg-gradient-to-br from-sky-500/10 to-indigo-500/10 rounded-full blur-3xl pointer-events-none"></div>
+
+                          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-10">
+                            <div>
+                              <div className="flex items-center space-x-2.5 mb-1">
+                                <span className="p-2 bg-sky-500/20 text-sky-400 rounded-xl border border-sky-500/30">
+                                  <UploadCloud className="w-5 h-5" />
+                                </span>
+                                <h4 className="text-xl font-bold text-white tracking-wide">
+                                  Carga Automática de Firmware Samsung (.ZIP)
+                                </h4>
+                                <span className="bg-indigo-500/20 text-indigo-300 text-[10px] font-mono px-2 py-0.5 rounded-full border border-indigo-500/30 font-bold uppercase tracking-wider">
+                                  Forense & Anti-Rollback
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-400">
+                                Sube el archivo ZIP completo oficial (SamMobile, Frija, SamFW, Bifrost). El sistema lo descomprime automáticamente, clasifica los paquetes (BL, AP, CP, CSC) y audita que sea 100% compatible con tu teléfono antes de flashear.
+                              </p>
+                            </div>
+
+                            {extractedSession && (
+                              <div className="flex items-center space-x-3">
+                                {firmwareZipFile && (
+                                  <span className="text-xs font-mono text-slate-300 bg-slate-800/80 px-3 py-1.5 rounded-xl border border-slate-700 truncate max-w-xs" title={firmwareZipFile.name}>
+                                    📦 {firmwareZipFile.name}
+                                  </span>
+                                )}
+                                <button
+                                  onClick={handleClearExtractedSession}
+                                  className="self-start md:self-auto px-3.5 py-1.5 bg-slate-800/80 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-slate-300 hover:text-white rounded-xl text-xs font-semibold flex items-center space-x-1.5 transition-all"
+                                >
+                                  <X className="w-3.5 h-3.5 text-slate-400" />
+                                  <span>Cargar Otro ZIP</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* DROPZONE / FILE SELECTOR */}
+                          {!extractedSession ? (
+                            <div
+                              onDragOver={(e) => { e.preventDefault(); setIsDraggingZip(true); }}
+                              onDragLeave={() => setIsDraggingZip(false)}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                setIsDraggingZip(false);
+                                if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                                  handleZipFileSelected(e.dataTransfer.files[0]);
+                                }
+                              }}
+                              className={`relative border-2 border-dashed rounded-2xl p-8 sm:p-12 text-center transition-all ${
+                                isDraggingZip
+                                  ? 'border-sky-400 bg-sky-500/10 scale-[1.01]'
+                                  : 'border-slate-700/80 hover:border-sky-500/50 bg-slate-950/40 hover:bg-sky-950/10'
+                              }`}
+                            >
+                              <input
+                                type="file"
+                                accept=".zip,application/zip"
+                                className="hidden"
+                                id="odin-firmware-zip-input"
+                                disabled={isUploadingZip}
+                                onChange={(e) => {
+                                  if (e.target.files && e.target.files[0]) {
+                                    handleZipFileSelected(e.target.files[0]);
+                                  }
+                                }}
+                              />
+
+                              {isUploadingZip ? (
+                                <div className="space-y-4 max-w-md mx-auto">
+                                  <div className="w-16 h-16 mx-auto bg-sky-500/20 border border-sky-500/40 rounded-2xl flex items-center justify-center text-sky-400 shadow-[0_0_20px_rgba(14,165,233,0.3)]">
+                                    <RefreshCw className="w-8 h-8 animate-spin" />
+                                  </div>
+                                  <div>
+                                    <h5 className="text-base font-bold text-white mb-1">
+                                      {zipUploadProgress < 100 ? `Subiendo Firmware al Servidor... (${zipUploadProgress}%)` : 'Descomprimiendo y Auditando Paquetes...'}
+                                    </h5>
+                                    <p className="text-xs text-slate-400">
+                                      Extrayendo archivos BL, AP, CP, CSC y contrastando modelo y bootloader contra el dispositivo Samsung...
+                                    </p>
+                                  </div>
+                                  <div className="w-full bg-slate-800 rounded-full h-2.5 overflow-hidden border border-slate-700">
+                                    <div
+                                      className="bg-gradient-to-r from-sky-500 to-indigo-500 h-2.5 rounded-full transition-all duration-300"
+                                      style={{ width: `${zipUploadProgress}%` }}
+                                    ></div>
+                                  </div>
+                                  <span className="text-[11px] font-mono text-sky-400">
+                                    Por favor espera, los firmwares Samsung suelen pesar entre 3 GB y 10 GB
+                                  </span>
+                                </div>
+                              ) : (
+                                <label htmlFor="odin-firmware-zip-input" className="cursor-pointer block space-y-4">
+                                  <div className="w-16 h-16 mx-auto bg-sky-950/60 border border-sky-500/40 rounded-2xl flex items-center justify-center text-sky-400 shadow-[0_0_20px_rgba(14,165,233,0.2)] group-hover:scale-105 transition-transform">
+                                    <UploadCloud className="w-8 h-8" />
+                                  </div>
+                                  <div>
+                                    <h5 className="text-base font-bold text-white mb-1">
+                                      Arrastra aquí tu archivo .ZIP de Firmware Samsung
+                                    </h5>
+                                    <p className="text-xs text-slate-400 max-w-lg mx-auto">
+                                      O haz clic para explorar en tu Mac. Acepta paquetes oficiales comprimidos (ej: <code className="text-sky-300 font-mono">SM-S911B_GTO_S911BXXSAFZG1_fac.zip</code>).
+                                    </p>
+                                  </div>
+                                  <div className="inline-flex items-center space-x-2 px-4 py-2 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 rounded-xl text-xs font-semibold transition-colors">
+                                    <FolderOpen className="w-4 h-4" />
+                                    <span>Examinar Archivo ZIP</span>
+                                  </div>
+                                </label>
+                              )}
+                            </div>
+                          ) : (
+                            /* AUDITORÍA Y VEREDICTO DE COMPATIBILIDAD */
+                            <div className="space-y-6">
+                              {/* BANNER DE DICTAMEN / VEREDICTO */}
+                              <div className={`p-5 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
+                                extractedSession.compatibility?.verdict?.status === 'ok'
+                                  ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-300 shadow-[0_0_25px_rgba(16,185,129,0.15)]'
+                                  : extractedSession.compatibility?.verdict?.status === 'warning'
+                                  ? 'bg-amber-950/40 border-amber-500/50 text-amber-300 shadow-[0_0_25px_rgba(245,158,11,0.15)]'
+                                  : 'bg-rose-950/50 border-rose-500/60 text-rose-300 shadow-[0_0_30px_rgba(244,63,94,0.25)]'
+                              }`}>
+                                <div className="flex items-start space-x-3.5">
+                                  <div className="p-2 rounded-xl bg-black/40 shrink-0 mt-0.5">
+                                    {extractedSession.compatibility?.verdict?.status === 'ok' ? (
+                                      <ShieldCheck className="w-6 h-6 text-emerald-400" />
+                                    ) : extractedSession.compatibility?.verdict?.status === 'warning' ? (
+                                      <AlertTriangle className="w-6 h-6 text-amber-400" />
+                                    ) : (
+                                      <XCircle className="w-6 h-6 text-rose-400 animate-pulse" />
+                                    )}
+                                  </div>
+                                  <div>
+                                    <h5 className="font-extrabold text-base tracking-wide flex items-center space-x-2">
+                                      <span>{extractedSession.compatibility?.verdict?.title}</span>
+                                    </h5>
+                                    <p className="text-xs opacity-90 mt-1 leading-relaxed max-w-3xl">
+                                      {extractedSession.compatibility?.verdict?.message}
+                                    </p>
+                                  </div>
+                                </div>
+
+                                <div className="shrink-0 flex items-center space-x-2">
+                                  {extractedSession.compatibility?.verdict?.canFlash ? (
+                                    <span className="px-3 py-1 bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 rounded-lg text-xs font-mono font-bold">
+                                      AUTORIZADO
+                                    </span>
+                                  ) : (
+                                    <span className="px-3 py-1 bg-rose-500/20 border border-rose-500/40 text-rose-300 rounded-lg text-xs font-mono font-bold">
+                                      BLOQUEADO POR SEGURIDAD
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* COMPARATIVA LADO A LADO: TELÉFONO VS FIRMWARE */}
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 font-mono text-xs">
+                                {/* CARD 1: MODELO */}
+                                <div className="bg-slate-800/70 border border-slate-700/80 rounded-2xl p-4 space-y-3">
+                                  <div className="flex items-center justify-between text-slate-400 border-b border-slate-700/60 pb-2">
+                                    <span className="font-sans font-bold flex items-center space-x-1.5">
+                                      <Smartphone className="w-3.5 h-3.5 text-sky-400" />
+                                      <span>Modelo Hardware</span>
+                                    </span>
+                                    {extractedSession.compatibility?.modelMatch === true ? (
+                                      <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded border border-emerald-500/30 font-bold">
+                                        COINCIDE
+                                      </span>
+                                    ) : extractedSession.compatibility?.modelMatch === false ? (
+                                      <span className="text-[10px] bg-rose-500/20 text-rose-400 px-2 py-0.5 rounded border border-rose-500/30 font-bold">
+                                        DISCREPANCIA
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] bg-slate-700 text-slate-300 px-2 py-0.5 rounded">
+                                        SIN INFO ADB
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="space-y-1.5">
+                                    <div className="flex justify-between">
+                                      <span className="text-slate-400">Firmware:</span>
+                                      <span className="font-bold text-white">{extractedSession.firmware?.model || 'Desconocido'}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                      <span className="text-slate-400">Dispositivo:</span>
+                                      <span className="font-bold text-sky-400">{extractedSession.device?.model || selectedDevice || 'N/A'}</span>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* CARD 2: NIVEL DE BINARIO / ANTI-ROLLBACK */}
+                                <div className="bg-slate-800/70 border border-slate-700/80 rounded-2xl p-4 space-y-3">
+                                  <div className="flex items-center justify-between text-slate-400 border-b border-slate-700/60 pb-2">
+                                    <span className="font-sans font-bold flex items-center space-x-1.5">
+                                      <Lock className="w-3.5 h-3.5 text-amber-400" />
+                                      <span>Nivel Binario (SW REV)</span>
+                                    </span>
+                                    {extractedSession.compatibility?.binaryMatch === true ? (
+                                      <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded border border-emerald-500/30 font-bold">
+                                        SEGURO
+                                      </span>
+                                    ) : extractedSession.compatibility?.binaryMatch === false ? (
+                                      <span className="text-[10px] bg-rose-500/20 text-rose-400 px-2 py-0.5 rounded border border-rose-500/30 font-bold">
+                                        ANTI-ROLLBACK FAIL
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] bg-slate-700 text-slate-300 px-2 py-0.5 rounded">
+                                        BIT DETECTADO
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="space-y-1.5">
+                                    <div className="flex justify-between">
+                                      <span className="text-slate-400">Firmware Bit:</span>
+                                      <span className="font-bold text-amber-300">
+                                        Bit {extractedSession.firmware?.bit || 'N/A'} (Nivel {extractedSession.firmware?.numericBit || 0})
+                                      </span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                      <span className="text-slate-400">Dispositivo Bit:</span>
+                                      <span className="font-bold text-white">
+                                        Bit {extractedSession.device?.bit || 'N/A'} (Nivel {extractedSession.device?.numericBit || 0})
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* CARD 3: REGIÓN & CSC */}
+                                <div className="bg-slate-800/70 border border-slate-700/80 rounded-2xl p-4 space-y-3">
+                                  <div className="flex items-center justify-between text-slate-400 border-b border-slate-700/60 pb-2">
+                                    <span className="font-sans font-bold flex items-center space-x-1.5">
+                                      <Globe className="w-3.5 h-3.5 text-purple-400" />
+                                      <span>Región & CSC</span>
+                                    </span>
+                                    <span className="text-[10px] bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded border border-purple-500/30 font-bold">
+                                      MULTI-CSC
+                                    </span>
+                                  </div>
+                                  <div className="space-y-1.5">
+                                    <div className="flex justify-between">
+                                      <span className="text-slate-400">Firmware Región:</span>
+                                      <span className="font-bold text-purple-300">{extractedSession.firmware?.region || 'OXM / Multi'}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                      <span className="text-slate-400">Dispositivo CSC:</span>
+                                      <span className="font-bold text-white">{extractedSession.device?.csc || 'N/A'}</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* SELECTOR INTERACTIVO DE CSC (LIMPIEZA VS CONSERVACIÓN DE DATOS) */}
+                              <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-5 space-y-4">
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                  <div className="flex items-center space-x-2">
+                                    <Database className="w-4 h-4 text-sky-400" />
+                                    <h5 className="text-sm font-bold text-white">
+                                      Selección de Tipo de Flasheo (CSC)
+                                    </h5>
+                                  </div>
+                                  <span className="text-[11px] text-slate-400">
+                                    {extractedSession.compatibility?.cscMessage}
+                                  </span>
+                                </div>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                  {/* OPCIÓN 1: HOME_CSC (CONSERVAR DATOS) */}
+                                  <div
+                                    onClick={() => {
+                                      if (extractedSession.files?.home_csc) setChosenCscChoice('home');
+                                    }}
+                                    className={`p-4 rounded-xl border transition-all cursor-pointer relative ${
+                                      chosenCscChoice === 'home'
+                                        ? 'bg-sky-500/10 border-sky-500 text-white shadow-[0_0_15px_rgba(14,165,233,0.15)]'
+                                        : extractedSession.files?.home_csc
+                                        ? 'bg-slate-900/60 border-slate-700/80 text-slate-400 hover:border-slate-600'
+                                        : 'bg-slate-900/30 border-slate-800 text-slate-600 cursor-not-allowed opacity-50'
+                                    }`}
+                                  >
+                                    <div className="flex items-center justify-between mb-1.5">
+                                      <div className="flex items-center space-x-2">
+                                        <input
+                                          type="radio"
+                                          name="cscChoiceOption"
+                                          checked={chosenCscChoice === 'home'}
+                                          disabled={!extractedSession.files?.home_csc}
+                                          onChange={() => setChosenCscChoice('home')}
+                                          className="text-sky-500 focus:ring-0"
+                                        />
+                                        <span className="font-bold text-xs text-sky-300">
+                                          HOME_CSC (Sin Borrar Datos)
+                                        </span>
+                                      </div>
+                                      <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded font-mono font-bold">
+                                        Recomendado para Upgrade
+                                      </span>
+                                    </div>
+                                    <p className="text-[11px] text-slate-400 leading-relaxed pl-5">
+                                      Conserva todas las fotos, cuentas de WhatsApp, apps y configuración del usuario. No realiza Factory Reset.
+                                    </p>
+                                  </div>
+
+                                  {/* OPCIÓN 2: CSC ESTÁNDAR (LIMPIEZA TOTAL) */}
+                                  <div
+                                    onClick={() => {
+                                      if (extractedSession.files?.csc) setChosenCscChoice('clean');
+                                    }}
+                                    className={`p-4 rounded-xl border transition-all cursor-pointer relative ${
+                                      chosenCscChoice === 'clean'
+                                        ? 'bg-amber-500/10 border-amber-500 text-white shadow-[0_0_15px_rgba(245,158,11,0.15)]'
+                                        : extractedSession.files?.csc
+                                        ? 'bg-slate-900/60 border-slate-700/80 text-slate-400 hover:border-slate-600'
+                                        : 'bg-slate-900/30 border-slate-800 text-slate-600 cursor-not-allowed opacity-50'
+                                    }`}
+                                  >
+                                    <div className="flex items-center justify-between mb-1.5">
+                                      <div className="flex items-center space-x-2">
+                                        <input
+                                          type="radio"
+                                          name="cscChoiceOption"
+                                          checked={chosenCscChoice === 'clean'}
+                                          disabled={!extractedSession.files?.csc}
+                                          onChange={() => setChosenCscChoice('clean')}
+                                          className="text-amber-500 focus:ring-0"
+                                        />
+                                        <span className="font-bold text-xs text-amber-300">
+                                          CSC Estándar (Formateo Limpio)
+                                        </span>
+                                      </div>
+                                      <span className="text-[10px] bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded font-mono font-bold">
+                                        Factory Reset
+                                      </span>
+                                    </div>
+                                    <p className="text-[11px] text-slate-400 leading-relaxed pl-5">
+                                      Borra absolutamente todo el almacenamiento interno. Obligatorio si el dispositivo está en bootloop o cambia de CSC/Región.
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* LISTA DE ARCHIVOS EXTRAÍDOS Y CLASIFICADOS */}
+                              <div className="space-y-2">
+                                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                                  Archivos Extraídos y Listos para Flasheo
+                                </span>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 font-mono text-xs">
+                                  {extractedSession.files?.bl && (
+                                    <div className="p-2.5 rounded-xl bg-slate-800/80 border border-blue-500/30 text-blue-300 flex items-center justify-between">
+                                      <div className="truncate pr-2">
+                                        <span className="font-bold text-blue-400 mr-1.5">[BL]</span>
+                                        <span className="text-[11px]">{extractedSession.files.bl.name}</span>
+                                      </div>
+                                      <span className="text-[10px] text-slate-400 shrink-0">
+                                        {(extractedSession.files.bl.size / (1024 * 1024)).toFixed(0)} MB
+                                      </span>
+                                    </div>
+                                  )}
+                                  {extractedSession.files?.ap && (
+                                    <div className="p-2.5 rounded-xl bg-slate-800/80 border border-cyan-500/30 text-cyan-300 flex items-center justify-between">
+                                      <div className="truncate pr-2">
+                                        <span className="font-bold text-cyan-400 mr-1.5">[AP]</span>
+                                        <span className="text-[11px]">{extractedSession.files.ap.name}</span>
+                                      </div>
+                                      <span className="text-[10px] text-slate-400 shrink-0">
+                                        {(extractedSession.files.ap.size / (1024 * 1024 * 1024)).toFixed(2)} GB
+                                      </span>
+                                    </div>
+                                  )}
+                                  {extractedSession.files?.cp && (
+                                    <div className="p-2.5 rounded-xl bg-slate-800/80 border border-purple-500/30 text-purple-300 flex items-center justify-between">
+                                      <div className="truncate pr-2">
+                                        <span className="font-bold text-purple-400 mr-1.5">[CP]</span>
+                                        <span className="text-[11px]">{extractedSession.files.cp.name}</span>
+                                      </div>
+                                      <span className="text-[10px] text-slate-400 shrink-0">
+                                        {(extractedSession.files.cp.size / (1024 * 1024)).toFixed(0)} MB
+                                      </span>
+                                    </div>
+                                  )}
+                                  {(chosenCscChoice === 'home' ? extractedSession.files?.home_csc : extractedSession.files?.csc) && (
+                                    <div className="p-2.5 rounded-xl bg-slate-800/80 border border-amber-500/30 text-amber-300 flex items-center justify-between">
+                                      <div className="truncate pr-2">
+                                        <span className="font-bold text-amber-400 mr-1.5">[{chosenCscChoice.toUpperCase()}]</span>
+                                        <span className="text-[11px]">
+                                          {(chosenCscChoice === 'home' ? extractedSession.files.home_csc : extractedSession.files.csc)?.name}
+                                        </span>
+                                      </div>
+                                      <span className="text-[10px] text-slate-400 shrink-0">
+                                        {(((chosenCscChoice === 'home' ? extractedSession.files.home_csc : extractedSession.files.csc)?.size || 0) / (1024 * 1024)).toFixed(0)} MB
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* BOTÓN DE ACCIÓN FLASHEO DE SESIÓN VERIFICADA */}
+                              <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-t border-slate-800">
+                                <div className="text-xs text-slate-400 flex items-center space-x-2">
+                                  <Info className="w-4 h-4 text-sky-400 shrink-0" />
+                                  <span>
+                                    El dispositivo debe estar conectado por cable en <strong>Modo Descarga (Odin)</strong>.
+                                  </span>
+                                </div>
+
+                                <button
+                                  onClick={handleFlashExtractedSession}
+                                  disabled={isFlashingExtracted}
+                                  className={`py-3.5 px-8 rounded-xl font-bold transition-all text-sm flex items-center justify-center space-x-3 shadow-lg ${
+                                    isFlashingExtracted
+                                      ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+                                      : extractedSession.compatibility?.verdict?.canFlash === false
+                                      ? 'bg-gradient-to-r from-rose-700 to-red-600 hover:from-rose-600 hover:to-red-500 text-white shadow-[0_0_25px_rgba(225,29,72,0.4)]'
+                                      : 'bg-gradient-to-r from-emerald-600 to-sky-600 hover:from-emerald-500 hover:to-sky-500 text-white shadow-[0_0_25px_rgba(16,185,129,0.4)]'
+                                  }`}
+                                >
+                                  {isFlashingExtracted ? (
+                                    <>
+                                      <RefreshCw className="w-5 h-5 animate-spin" />
+                                      <span>Flasheando Firmware Verificado...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Flame className="w-5 h-5 text-amber-300" />
+                                      <span>
+                                        {extractedSession.compatibility?.verdict?.canFlash === false
+                                          ? 'FORZAR FLASHEO DE SESIÓN (RIESGO ALTO)'
+                                          : 'FLASHEAR FIRMWARE VERIFICADO (HEIMDALL)'}
+                                      </span>
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
 
                         {/* Odin 5-Slot Matrix (+ PIT) */}

@@ -3382,7 +3382,454 @@ function mapImageNameToPartition(filename: string): string | null {
   return null;
 }
 
-// Flash firmware via Heimdall (Odin protocol)
+function parseSamsungBuildInfo(buildOrFilename: string): {
+  model?: string;
+  region?: string;
+  bit?: string;
+  numericBit?: number;
+  androidVersionLetter?: string;
+  approxAndroidVersion?: string;
+  buildId?: string;
+  raw: string;
+} {
+  const clean = path.basename(buildOrFilename);
+  
+  const pdaMatch = clean.match(/([A-Z0-9]{4,6})(XX|DX|UB|ZC|ZH|OXM|U[0-9]|S[0-9])([US])([0-9A-Z])([A-Z0-9]{3,4})/i)
+                || clean.match(/(S9[0-9]{2}[A-Z0-9]|G9[0-9]{2}[A-Z0-9]|A[0-9]{3}[A-Z0-9]|N[0-9]{3}[A-Z0-9]|F[0-9]{3}[A-Z0-9]|M[0-9]{3}[A-Z0-9])([A-Z0-9]{2})([US])([0-9A-Z])([A-Z0-9]+)/i);
+
+  let modelMatch = clean.match(/(SM-[A-Z0-9]+)/i);
+  let model = modelMatch ? modelMatch[1].toUpperCase() : undefined;
+
+  if (pdaMatch) {
+    const rawModel = pdaMatch[1].toUpperCase();
+    if (!model) {
+      model = rawModel.startsWith('SM-') ? rawModel : `SM-${rawModel}`;
+    }
+    const region = pdaMatch[2].toUpperCase();
+    const bitChar = pdaMatch[4].toUpperCase();
+    const numericBit = parseInt(bitChar, 16) || parseInt(bitChar, 10) || 1;
+    const androidLetter = pdaMatch[5].charAt(0).toUpperCase();
+
+    const androidMap: Record<string, string> = {
+      'A': 'Android 9 (Pie)',
+      'B': 'Android 10',
+      'C': 'Android 11',
+      'D': 'Android 12',
+      'E': 'Android 13',
+      'F': 'Android 14 (One UI 6)',
+      'G': 'Android 15 (One UI 7)'
+    };
+
+    return {
+      model,
+      region,
+      bit: bitChar,
+      numericBit,
+      androidVersionLetter: androidLetter,
+      approxAndroidVersion: androidMap[androidLetter] || 'Desconocido',
+      buildId: pdaMatch[0],
+      raw: clean
+    };
+  }
+
+  return {
+    model,
+    raw: clean
+  };
+}
+
+function findFilesRecursively(dir: string): string[] {
+  let results: string[] = [];
+  try {
+    const list = fs.readdirSync(dir);
+    for (const file of list) {
+      const full = path.join(dir, file);
+      const stat = fs.statSync(full);
+      if (stat.isDirectory()) {
+        results = results.concat(findFilesRecursively(full));
+      } else {
+        results.push(full);
+      }
+    }
+  } catch {}
+  return results;
+}
+
+async function executeHeimdallFlash(
+  sessionDir: string,
+  slotFiles: { slot: string; filePath: string; originalName: string }[],
+  customPitPath: string | null,
+  shouldReboot: boolean,
+  shouldRepartition: boolean,
+  log: (msg: string) => void
+): Promise<string> {
+  // 1. Verify download mode
+  try {
+    const { stdout: detOut } = await execAsync(`"${HEIMDALL_PATH}" detect`);
+    if (!detOut.toLowerCase().includes('device detected')) {
+      throw new Error('No se detectó ningún dispositivo Samsung en Modo Descarga.');
+    }
+    log('Dispositivo Samsung en Modo Descarga detectado.');
+  } catch (e: any) {
+    throw new Error('No se detectó el dispositivo en Modo Descarga. Conecta el cable en Modo Odin.');
+  }
+
+  const extractedImages: { partition: string; filePath: string }[] = [];
+  let resolvedPitPath: string | null = customPitPath;
+
+  for (const item of slotFiles) {
+    const slotName = item.slot.toUpperCase();
+    log(`Procesando paquete ${slotName}: ${item.originalName}`);
+
+    const ext = path.extname(item.originalName).toLowerCase();
+    if (ext === '.md5' || ext === '.tar' || item.originalName.endsWith('.tar.md5')) {
+      const extractSubdir = path.join(sessionDir, item.slot);
+      fs.mkdirSync(extractSubdir, { recursive: true });
+      log(`Extrayendo archivo tar ${item.originalName}...`);
+      await execAsync(`tar -xf "${item.filePath}" -C "${extractSubdir}"`);
+
+      const extractedItems = fs.readdirSync(extractSubdir);
+      for (const extractedItem of extractedItems) {
+        let itemPath = path.join(extractSubdir, extractedItem);
+        let itemName = extractedItem;
+
+        if (extractedItem.endsWith('.lz4')) {
+          const decompressed = itemPath.slice(0, -4);
+          log(`Descomprimiendo LZ4: ${extractedItem} -> ${path.basename(decompressed)}`);
+          await execAsync(`lz4 -d -f "${itemPath}" "${decompressed}"`);
+          itemPath = decompressed;
+          itemName = path.basename(decompressed);
+        }
+
+        if (itemName.endsWith('.pit') && !resolvedPitPath) {
+          resolvedPitPath = itemPath;
+          log(`PIT detectado dentro del firmware: ${itemName}`);
+          continue;
+        }
+
+        const partName = mapImageNameToPartition(itemName);
+        if (partName) {
+          extractedImages.push({ partition: partName, filePath: itemPath });
+          log(`Mapeado: ${itemName} -> Partición [${partName}]`);
+        }
+      }
+    } else {
+      let itemPath = item.filePath;
+      let itemName = item.originalName;
+      if (itemName.endsWith('.lz4')) {
+        const decompressed = path.join(sessionDir, itemName.slice(0, -4));
+        await execAsync(`lz4 -d -f "${itemPath}" "${decompressed}"`);
+        itemPath = decompressed;
+        itemName = path.basename(decompressed);
+      }
+      const partName = mapImageNameToPartition(itemName);
+      if (partName) {
+        extractedImages.push({ partition: partName, filePath: itemPath });
+        log(`Mapeado archivo directo: ${itemName} -> [${partName}]`);
+      }
+    }
+  }
+
+  if (extractedImages.length === 0) {
+    throw new Error('No se encontraron imágenes válidas para flashear en los paquetes.');
+  }
+
+  let flashCmd = `"${HEIMDALL_PATH}" flash`;
+  if (!shouldReboot) {
+    flashCmd += ' --no-reboot';
+  }
+  if (resolvedPitPath) {
+    if (shouldRepartition) {
+      flashCmd += ` --repartition --pit "${resolvedPitPath}"`;
+    } else {
+      flashCmd += ` --use-local-pit --pit "${resolvedPitPath}"`;
+    }
+  }
+
+  const partitionMap = new Map<string, string>();
+  for (const img of extractedImages) {
+    partitionMap.set(img.partition, img.filePath);
+  }
+
+  for (const [partition, imgPath] of partitionMap.entries()) {
+    flashCmd += ` --${partition} "${imgPath}"`;
+  }
+
+  log(`Ejecutando Heimdall con ${partitionMap.size} particiones...`);
+  const { stdout, stderr } = await execAsync(flashCmd);
+  log('Flasheo completado con éxito.');
+  return stdout + '\n' + stderr;
+}
+
+// 1. Carga, descompresión y verificación de compatibilidad de Firmware ZIP
+app.post('/api/odin/upload-firmware-zip', upload.single('firmwareZip'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ success: false, error: 'No se recibió ningún archivo de firmware.' });
+  }
+
+  const zipPath = req.file.path;
+  const originalZipName = req.file.originalname;
+  const sessionId = `odin_zip_${Date.now()}`;
+  const sessionDir = path.join(uploadDir, sessionId);
+  fs.mkdirSync(sessionDir, { recursive: true });
+
+  try {
+    // Descomprimir archivo ZIP mediante unzip
+    await execAsync(`/usr/bin/unzip -q -o "${zipPath}" -d "${sessionDir}"`);
+    try { fs.unlinkSync(zipPath); } catch {}
+
+    const allFiles = findFilesRecursively(sessionDir);
+    if (allFiles.length === 0) {
+      throw new Error('El archivo ZIP está vacío o corrupto.');
+    }
+
+    // Clasificar archivos Samsung por nomenclatura estándar
+    let blFile: { name: string; path: string; size: number } | null = null;
+    let apFile: { name: string; path: string; size: number } | null = null;
+    let cpFile: { name: string; path: string; size: number } | null = null;
+    let cscFile: { name: string; path: string; size: number } | null = null;
+    let homeCscFile: { name: string; path: string; size: number } | null = null;
+    let userdataFile: { name: string; path: string; size: number } | null = null;
+    let pitFile: { name: string; path: string; size: number } | null = null;
+
+    for (const fPath of allFiles) {
+      const bName = path.basename(fPath);
+      const upper = bName.toUpperCase();
+      const stat = fs.statSync(fPath);
+
+      if (upper.startsWith('BL_') && (upper.endsWith('.TAR.MD5') || upper.endsWith('.TAR'))) {
+        blFile = { name: bName, path: fPath, size: stat.size };
+      } else if (upper.startsWith('AP_') && (upper.endsWith('.TAR.MD5') || upper.endsWith('.TAR'))) {
+        apFile = { name: bName, path: fPath, size: stat.size };
+      } else if (upper.startsWith('CP_') && (upper.endsWith('.TAR.MD5') || upper.endsWith('.TAR'))) {
+        cpFile = { name: bName, path: fPath, size: stat.size };
+      } else if (upper.startsWith('HOME_CSC_') && (upper.endsWith('.TAR.MD5') || upper.endsWith('.TAR'))) {
+        homeCscFile = { name: bName, path: fPath, size: stat.size };
+      } else if (upper.startsWith('CSC_') && (upper.endsWith('.TAR.MD5') || upper.endsWith('.TAR'))) {
+        cscFile = { name: bName, path: fPath, size: stat.size };
+      } else if (upper.startsWith('USERDATA_') && (upper.endsWith('.TAR.MD5') || upper.endsWith('.TAR'))) {
+        userdataFile = { name: bName, path: fPath, size: stat.size };
+      } else if (upper.endsWith('.PIT')) {
+        pitFile = { name: bName, path: fPath, size: stat.size };
+      }
+    }
+
+    // Analizar metadatos de compilación del firmware
+    const probeStr = blFile?.name || apFile?.name || originalZipName;
+    const fwInfo = parseSamsungBuildInfo(probeStr);
+
+    // Consultar dispositivo conectado (si se envió deviceId)
+    const { deviceId } = req.body;
+    let devInfo: any = null;
+    let modelMatch: boolean | null = null;
+    let modelMessage = '';
+    let binaryMatch: boolean | null = null;
+    let binaryMessage = '';
+
+    if (deviceId) {
+      try {
+        const { stdout: mOut } = await execAsync(`${ADB_PATH} -s ${deviceId} shell getprop ro.product.model`).catch(() => ({ stdout: '' }));
+        const { stdout: bOut } = await execAsync(`${ADB_PATH} -s ${deviceId} shell getprop ro.bootloader`).catch(() => ({ stdout: '' }));
+        const { stdout: pOut } = await execAsync(`${ADB_PATH} -s ${deviceId} shell getprop ro.build.PDA`).catch(() => ({ stdout: '' }));
+        const { stdout: cOut } = await execAsync(`${ADB_PATH} -s ${deviceId} shell getprop ro.csc.sales_code`).catch(() => ({ stdout: '' }));
+
+        const devModel = mOut.trim();
+        const devBootloader = bOut.trim() || pOut.trim();
+        const devCsc = cOut.trim();
+        const devParsed = parseSamsungBuildInfo(devBootloader || devModel);
+
+        devInfo = {
+          model: devModel,
+          bootloader: devBootloader,
+          bit: devParsed.bit || 'Desconocido',
+          numericBit: devParsed.numericBit || 0,
+          csc: devCsc
+        };
+
+        // 1. Verificación de Modelo
+        const normFw = (fwInfo.model || '').replace(/^SM-/i, '').toUpperCase();
+        const normDev = (devModel || '').replace(/^SM-/i, '').toUpperCase();
+        if (normFw && normDev) {
+          modelMatch = normFw === normDev;
+          if (modelMatch) {
+            modelMessage = `✓ Compatible: El firmware pertenece al modelo ${fwInfo.model} y coincide con el dispositivo (${devModel}).`;
+          } else {
+            modelMessage = `❌ INCOMPATIBLE: El firmware es para ${fwInfo.model}, pero tu dispositivo conectado es ${devModel}. Flashear este archivo provocará un brickeo.`;
+          }
+        } else {
+          modelMessage = `Dispositivo: ${devModel || 'N/A'} | Firmware: ${fwInfo.model || 'N/A'}`;
+        }
+
+        // 2. Verificación de Binario (Anti-Rollback SW REV)
+        const devNumBit = devParsed.numericBit || 0;
+        const fwNumBit = fwInfo.numericBit || 0;
+        if (devNumBit > 0 && fwNumBit > 0) {
+          if (fwNumBit >= devNumBit) {
+            binaryMatch = true;
+            binaryMessage = `✓ Anti-Rollback Seguro: Firmware Binario ${fwInfo.bit} (Nivel ${fwNumBit}) vs Teléfono Binario ${devParsed.bit} (Nivel ${devNumBit}). El bootloader aceptará la instalación.`;
+          } else {
+            binaryMatch = false;
+            binaryMessage = `❌ ERROR ANTI-ROLLBACK (SW REV CHECK FAIL): El teléfono tiene Binario ${devParsed.bit} (Nivel ${devNumBit}) y el firmware es Binario ${fwInfo.bit} (Nivel ${fwNumBit}). Samsung prohíbe degradar el binario; el teléfono rechazará el flasheo con error SW REV.`;
+          }
+        } else {
+          binaryMessage = `Nivel de binario firmware: Bit ${fwInfo.bit || 'Desconocido'}.`;
+        }
+
+      } catch {}
+    }
+
+    // 3. Resumen de opciones CSC
+    let cscMessage = '';
+    if (cscFile && homeCscFile) {
+      cscMessage = 'El ZIP incluye tanto CSC (Formateo Limpio) como HOME_CSC (Actualización sin borrar datos). Podrás elegir cuál flashear.';
+    } else if (homeCscFile) {
+      cscMessage = 'El paquete incluye HOME_CSC (Conservará las fotos y aplicaciones del usuario).';
+    } else if (cscFile) {
+      cscMessage = 'El paquete incluye CSC estándar (Realizará un formateo completo / Factory Reset).';
+    }
+
+    // 4. Dictamen Global
+    let verdict = {
+      status: 'ok' as 'ok' | 'warning' | 'danger',
+      title: '✓ FIRMWARE 100% COMPATIBLE Y SEGURO',
+      message: 'El modelo y nivel de binario coinciden plenamente con el terminal. Es seguro proceder con el flasheo.',
+      canFlash: true
+    };
+
+    if (modelMatch === false) {
+      verdict = {
+        status: 'danger',
+        title: '❌ FIRMWARE INCOMPATIBLE (MODELO NO COINCIDE)',
+        message: modelMessage,
+        canFlash: false
+      };
+    } else if (binaryMatch === false) {
+      verdict = {
+        status: 'danger',
+        title: '❌ BLOQUEO POR ANTI-ROLLBACK (SW REV CHECK)',
+        message: binaryMessage,
+        canFlash: false
+      };
+    } else if (!blFile || !apFile || (!cscFile && !homeCscFile)) {
+      verdict = {
+        status: 'warning',
+        title: '⚠️ PAQUETE DE FIRMWARE INCOMPLETO',
+        message: 'No se encontraron todos los paquetes esenciales (Falta BL, AP o CSC en el ZIP).',
+        canFlash: false
+      };
+    }
+
+    res.json({
+      success: true,
+      sessionId,
+      sessionDir,
+      firmware: fwInfo,
+      device: devInfo,
+      compatibility: {
+        modelMatch,
+        modelMessage,
+        binaryMatch,
+        binaryMessage,
+        cscMessage,
+        verdict
+      },
+      files: {
+        bl: blFile,
+        ap: apFile,
+        cp: cpFile,
+        csc: cscFile,
+        home_csc: homeCscFile,
+        userdata: userdataFile,
+        pit: pitFile
+      }
+    });
+
+  } catch (err: any) {
+    try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch {}
+    res.status(500).json({ success: false, error: 'Error al descomprimir y auditar firmware: ' + err.message });
+  }
+});
+
+// 2. Flashear sesión previamente descomprimida
+app.post('/api/odin/flash-extracted-session', async (req, res) => {
+  const { sessionId, cscChoice = 'home', reboot = true, repartition = false } = req.body;
+  if (!sessionId) {
+    return res.status(400).json({ success: false, error: 'Identificador de sesión no proporcionado.' });
+  }
+
+  const sessionDir = path.join(uploadDir, sessionId);
+  if (!fs.existsSync(sessionDir)) {
+    return res.status(404).json({ success: false, error: 'La sesión de firmware ha expirado o no existe.' });
+  }
+
+  const logs: string[] = [];
+  const log = (msg: string) => logs.push(`[${new Date().toLocaleTimeString()}] ${msg}`);
+
+  try {
+    log('Iniciando flasheo desde sesión de firmware descomprimida...');
+
+    const allFiles = findFilesRecursively(sessionDir);
+    const slotFiles: { slot: string; filePath: string; originalName: string }[] = [];
+    let customPitPath: string | null = null;
+
+    let blPath: string | null = null;
+    let apPath: string | null = null;
+    let cpPath: string | null = null;
+    let cscPath: string | null = null;
+    let homeCscPath: string | null = null;
+
+    for (const fPath of allFiles) {
+      const bName = path.basename(fPath);
+      const upper = bName.toUpperCase();
+      if (upper.startsWith('BL_')) blPath = fPath;
+      else if (upper.startsWith('AP_')) apPath = fPath;
+      else if (upper.startsWith('CP_')) cpPath = fPath;
+      else if (upper.startsWith('HOME_CSC_')) homeCscPath = fPath;
+      else if (upper.startsWith('CSC_')) cscPath = fPath;
+      else if (upper.endsWith('.PIT')) customPitPath = fPath;
+    }
+
+    if (blPath) slotFiles.push({ slot: 'bl', filePath: blPath, originalName: path.basename(blPath) });
+    if (apPath) slotFiles.push({ slot: 'ap', filePath: apPath, originalName: path.basename(apPath) });
+    if (cpPath) slotFiles.push({ slot: 'cp', filePath: cpPath, originalName: path.basename(cpPath) });
+
+    // Elegir CSC según selección del usuario
+    const chosenCsc = (cscChoice === 'home' && homeCscPath) ? homeCscPath : (cscPath || homeCscPath);
+    if (chosenCsc) {
+      slotFiles.push({ slot: 'csc', filePath: chosenCsc, originalName: path.basename(chosenCsc) });
+      log(`Opción CSC seleccionada: ${cscChoice === 'home' ? 'HOME_CSC (Conservar datos)' : 'CSC Estándar (Limpieza)'}`);
+    }
+
+    const flashLogs = await executeHeimdallFlash(
+      sessionDir,
+      slotFiles,
+      customPitPath,
+      reboot,
+      repartition,
+      log
+    );
+
+    const fullLog = logs.join('\n') + '\n\n' + flashLogs;
+    try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch {}
+
+    res.json({
+      success: true,
+      message: 'Flasheo Samsung completado exitosamente desde paquete ZIP.',
+      logs: fullLog
+    });
+
+  } catch (err: any) {
+    log(`ERROR: ${err.message}`);
+    try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch {}
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      logs: logs.join('\n') + '\n' + (err.stdout || '') + '\n' + (err.stderr || '')
+    });
+  }
+});
+
+// 3. Flasheo manual multislot existente (compatibilidad)
 app.post('/api/odin/flash', upload.fields([
   { name: 'bl', maxCount: 1 },
   { name: 'ap', maxCount: 1 },
@@ -3403,22 +3850,8 @@ app.post('/api/odin/flash', upload.fields([
   const log = (msg: string) => logs.push(`[${new Date().toLocaleTimeString()}] ${msg}`);
 
   try {
-    log('Iniciando sesión de flasheo Samsung Odin (Heimdall)...');
-
-    // Verify download mode
-    try {
-      const { stdout: detOut } = await execAsync(`"${HEIMDALL_PATH}" detect`);
-      if (!detOut.toLowerCase().includes('device detected')) {
-        throw new Error('No se detectó ningún dispositivo Samsung en Modo Descarga.');
-      }
-      log('Dispositivo Samsung en Modo Descarga detectado.');
-    } catch (e: any) {
-      throw new Error('No se detectó el dispositivo en Modo Descarga. Conecta el cable en Modo Odin.');
-    }
-
-    // Process files
-    const slotKeys = ['bl', 'ap', 'cp', 'csc', 'userdata', 'pit'];
-    const extractedImages: { partition: string; filePath: string }[] = [];
+    log('Iniciando sesión de flasheo Samsung Odin...');
+    const slotFiles: { slot: string; filePath: string; originalName: string }[] = [];
     let customPitPath: string | null = null;
 
     if (files && files.pit && files.pit[0]) {
@@ -3426,97 +3859,28 @@ app.post('/api/odin/flash', upload.fields([
       log(`Archivo PIT provisto por usuario: ${files.pit[0].originalname}`);
     }
 
+    const slotKeys = ['bl', 'ap', 'cp', 'csc', 'userdata'];
     for (const key of slotKeys) {
-      if (key === 'pit') continue;
       if (files && files[key] && files[key][0]) {
-        const file = files[key][0];
-        const slotName = key.toUpperCase();
-        log(`Procesando paquete ${slotName}: ${file.originalname}`);
-
-        const ext = path.extname(file.originalname).toLowerCase();
-        if (ext === '.md5' || ext === '.tar' || file.originalname.endsWith('.tar.md5')) {
-          const extractSubdir = path.join(sessionDir, key);
-          fs.mkdirSync(extractSubdir, { recursive: true });
-          log(`Extrayendo archivo tar ${file.originalname}...`);
-          await execAsync(`tar -xf "${file.path}" -C "${extractSubdir}"`);
-
-          const extractedItems = fs.readdirSync(extractSubdir);
-          for (const item of extractedItems) {
-            let itemPath = path.join(extractSubdir, item);
-            let itemName = item;
-
-            if (item.endsWith('.lz4')) {
-              const decompressed = itemPath.slice(0, -4);
-              log(`Descomprimiendo LZ4: ${item} -> ${path.basename(decompressed)}`);
-              await execAsync(`lz4 -d -f "${itemPath}" "${decompressed}"`);
-              itemPath = decompressed;
-              itemName = path.basename(decompressed);
-            }
-
-            if (itemName.endsWith('.pit') && !customPitPath) {
-              customPitPath = itemPath;
-              log(`PIT detectado dentro del firmware: ${itemName}`);
-              continue;
-            }
-
-            const partName = mapImageNameToPartition(itemName);
-            if (partName) {
-              extractedImages.push({ partition: partName, filePath: itemPath });
-              log(`Mapeado: ${itemName} -> Partición [${partName}]`);
-            }
-          }
-        } else {
-          let itemPath = file.path;
-          let itemName = file.originalname;
-          if (itemName.endsWith('.lz4')) {
-            const decompressed = path.join(sessionDir, itemName.slice(0, -4));
-            await execAsync(`lz4 -d -f "${itemPath}" "${decompressed}"`);
-            itemPath = decompressed;
-            itemName = path.basename(decompressed);
-          }
-          const partName = mapImageNameToPartition(itemName);
-          if (partName) {
-            extractedImages.push({ partition: partName, filePath: itemPath });
-            log(`Mapeado archivo directo: ${itemName} -> [${partName}]`);
-          }
-        }
+        slotFiles.push({
+          slot: key,
+          filePath: files[key][0].path,
+          originalName: files[key][0].originalname
+        });
       }
     }
 
-    if (extractedImages.length === 0) {
-      throw new Error('No se encontraron imágenes válidas para flashear en los paquetes seleccionados.');
-    }
+    const flashLogs = await executeHeimdallFlash(
+      sessionDir,
+      slotFiles,
+      customPitPath,
+      shouldReboot,
+      shouldRepartition,
+      log
+    );
 
-    let flashCmd = `"${HEIMDALL_PATH}" flash`;
-    if (!shouldReboot) {
-      flashCmd += ' --no-reboot';
-    }
-    if (customPitPath) {
-      if (shouldRepartition) {
-        flashCmd += ` --repartition --pit "${customPitPath}"`;
-      } else {
-        flashCmd += ` --use-local-pit --pit "${customPitPath}"`;
-      }
-    }
-
-    const partitionMap = new Map<string, string>();
-    for (const img of extractedImages) {
-      partitionMap.set(img.partition, img.filePath);
-    }
-
-    for (const [partition, imgPath] of partitionMap.entries()) {
-      flashCmd += ` --${partition} "${imgPath}"`;
-    }
-
-    log(`Ejecutando Heimdall con ${partitionMap.size} particiones...`);
-
-    const { stdout, stderr } = await execAsync(flashCmd);
-    log('Flasheo completado con éxito.');
-    const fullLog = logs.join('\n') + '\n\n' + stdout + '\n' + stderr;
-
-    try {
-      fs.rmSync(sessionDir, { recursive: true, force: true });
-    } catch {}
+    const fullLog = logs.join('\n') + '\n\n' + flashLogs;
+    try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch {}
 
     res.json({
       success: true,
@@ -3526,10 +3890,7 @@ app.post('/api/odin/flash', upload.fields([
 
   } catch (err: any) {
     log(`ERROR: ${err.message}`);
-    try {
-      fs.rmSync(sessionDir, { recursive: true, force: true });
-    } catch {}
-
+    try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch {}
     res.status(500).json({
       success: false,
       error: err.message,
