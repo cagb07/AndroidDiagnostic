@@ -3084,6 +3084,24 @@ function App() {
                               <p>Apaga el dispositivo. Mantén presionados <strong className="text-sky-300">Volumen Abajo + Botón Home + Power</strong> simultáneamente y confirma con Volumen Arriba.</p>
                             </div>
                           </div>
+
+                          {/* D2 Screen Alert */}
+                          <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 text-xs text-amber-300 flex items-start space-x-3 mt-3">
+                            <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                            <div className="space-y-1.5">
+                              <div className="font-bold text-amber-200">¿Tu pantalla muestra "[Reboot Device - D2]" o se desconectó el teléfono?</div>
+                              <p className="text-slate-300">
+                                En los Galaxy S20 a S24 con One UI 5/6 (Android 13/14), Knox bloquea el comando de software <code>adb reboot download</code> por seguridad y apaga el puerto USB, mostrando la pantalla turquesa <code>[Reboot Device - D2]</code>. Para resolverlo e ingresar correctamente:
+                              </p>
+                              <ol className="list-decimal list-inside space-y-1 text-slate-300 ml-1">
+                                <li>Mantén presionado <strong className="text-white">Bajar Volumen + Encendido durante 7 segundos</strong> para forzar el reinicio/apagado.</li>
+                                <li>Con el teléfono apagado y el cable desconectado: mantén presionados <strong className="text-white">Subir Volumen + Bajar Volumen a la vez</strong> (ambos botones de volumen).</li>
+                                <li>Sin soltar ambos botones de volumen, <strong>conecta el cable USB-C</strong> a la Mac.</li>
+                                <li>Aparecerá la pantalla azul de advertencia (Warning). Presiona <strong className="text-white">Subir Volumen (Vol+)</strong> una sola vez.</li>
+                                <li>¡Listo! Aparecerá <strong>Downloading...</strong> y el HUD lo reconocerá inmediatamente en verde.</li>
+                              </ol>
+                            </div>
+                          </div>
                         </div>
 
                       </div>
