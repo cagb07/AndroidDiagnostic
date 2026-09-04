@@ -3899,6 +3899,17 @@ app.post('/api/odin/flash', upload.fields([
   }
 });
 
+// Middleware global para manejo seguro de errores (ej: abortos de conexión o subidas canceladas)
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (err.message === 'Request aborted' || err.code === 'ECONNABORTED' || err.code === 'ECONNRESET') {
+    return; // El cliente cerró la pestaña o canceló la petición; ignorar limpiamente
+  }
+  console.error('[EXPRESS ERROR]', err);
+  if (!res.headersSent) {
+    res.status(500).json({ success: false, error: err.message || 'Error interno del servidor' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Backend API running on http://localhost:${PORT}`);
 });
