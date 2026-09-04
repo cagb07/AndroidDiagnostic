@@ -3411,7 +3411,7 @@ function App() {
                             <h4 className="text-orange-400 font-bold mb-4 flex items-center"><Activity className="w-4 h-4 mr-2" /> Historial de Temperatura (Batería)</h4>
                             {thermalData.length > 0 ? (
                               <div className="h-48">
-                                <ResponsiveContainer width="100%" height="100%">
+                                <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={180}>
                                   <LineChart data={thermalData}>
                                     <XAxis dataKey="timestamp" tick={false} axisLine={false} />
                                     <YAxis domain={['auto', 'auto']} stroke="#475569" />

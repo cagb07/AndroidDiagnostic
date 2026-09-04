@@ -10,12 +10,15 @@ import gplay from 'google-play-scraper';
 
 const execAsync = util.promisify(exec);
 const execFileAsync = util.promisify(execFile);
-const client = adb.createClient();
-const app = express();
-const PORT = 3001;
+process.on('uncaughtException', (err) => {
+  console.error('[UNCAUGHT EXCEPTION]', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[UNHANDLED REJECTION]', reason);
+});
 
-app.use(cors());
-app.use(express.json());
+// Ensure PATH contains common tool locations
+process.env.PATH = `${process.env.PATH}:/usr/local/bin:/opt/homebrew/bin:${path.join(process.env.HOME || '', 'Library/Android/sdk/platform-tools')}`;
 
 // Auto-detect path for adb and fastboot
 function resolveBinaryPath(name: string): string {
@@ -36,6 +39,13 @@ function resolveBinaryPath(name: string): string {
 const ADB_PATH = resolveBinaryPath('adb');
 const FASTBOOT_PATH = resolveBinaryPath('fastboot');
 console.log(`[ADB] Using: ${ADB_PATH}, [FASTBOOT] Using: ${FASTBOOT_PATH}`);
+
+const client = adb.createClient({ bin: ADB_PATH });
+const app = express();
+const PORT = 3001;
+
+app.use(cors());
+app.use(express.json());
 
 // Setup Multer for temporary file uploads
 const uploadDir = path.join(__dirname, '..', 'tmp');
@@ -72,13 +82,78 @@ async function ensureAdb() {
   }
 }
 
+async function getDeviceList(): Promise<any[]> {
+  try {
+    return await client.listDevices();
+  } catch (clientErr) {
+    try {
+      const { stdout } = await execAsync(`${ADB_PATH} devices`);
+      const lines = stdout.trim().split('\n').slice(1);
+      return lines
+        .map(l => l.trim())
+        .filter(l => l.length > 0 && !l.startsWith('*'))
+        .map(l => {
+          const [id, type] = l.split(/\s+/);
+          return { id, type: type || 'device' };
+        });
+    } catch (e) {
+      return [];
+    }
+  }
+}
+
+const sseClients = new Set<express.Response>();
+
+async function broadcastDevices() {
+  try {
+    const devices = await getDeviceList();
+    const payload = `data: ${JSON.stringify(devices)}\n\n`;
+    for (const clientRes of sseClients) {
+      try {
+        clientRes.write(payload);
+      } catch (err) {
+        sseClients.delete(clientRes);
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
+}
+
+let globalTracker: any = null;
+async function initDeviceTracker() {
+  try {
+    await ensureAdb();
+    if (globalTracker) {
+      try {
+        globalTracker.removeAllListeners();
+        globalTracker.on('error', () => {});
+        globalTracker.end();
+      } catch (e) {}
+    }
+    globalTracker = await client.trackDevices();
+    globalTracker.on('add', broadcastDevices);
+    globalTracker.on('remove', broadcastDevices);
+    globalTracker.on('change', broadcastDevices);
+    globalTracker.on('error', (err: any) => {
+      console.warn('ADB tracker error (handled):', err?.message || err);
+      setTimeout(initDeviceTracker, 3000);
+    });
+  } catch (err: any) {
+    console.warn('Failed to start device tracker, will retry:', err?.message || err);
+    setTimeout(initDeviceTracker, 5000);
+  }
+}
+
+initDeviceTracker();
+
 app.get('/api/devices', async (req, res) => {
   try {
     await ensureAdb();
-    const devices = await client.listDevices();
+    const devices = await getDeviceList();
     res.json({ success: true, devices });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: err.message, devices: [] });
   }
 });
 
@@ -87,36 +162,34 @@ app.get('/api/devices/events', async (req, res) => {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive'
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*'
   });
 
-  const sendDevices = async () => {
-    try {
-      const devices = await client.listDevices();
-      res.write(`data: ${JSON.stringify(devices)}\n\n`);
-    } catch (e) {
-      // ignore
-    }
-  };
+  sseClients.add(res);
 
   // Send initial list
-  await sendDevices();
+  getDeviceList().then(devices => {
+    try {
+      res.write(`data: ${JSON.stringify(devices)}\n\n`);
+    } catch (e) {
+      sseClients.delete(res);
+    }
+  });
 
-  let tracker: any;
-  try {
-    tracker = await client.trackDevices();
-    tracker.on('add', sendDevices);
-    tracker.on('remove', sendDevices);
-    tracker.on('change', sendDevices);
-  } catch (err) {
-    console.error('Error tracking devices:', err);
-  }
+  // Keep-alive ping every 20 seconds
+  const pingInterval = setInterval(() => {
+    try {
+      res.write(': ping\n\n');
+    } catch (e) {
+      clearInterval(pingInterval);
+      sseClients.delete(res);
+    }
+  }, 20000);
 
   req.on('close', () => {
-    if (tracker) {
-      tracker.removeAllListeners();
-      tracker.end();
-    }
+    clearInterval(pingInterval);
+    sseClients.delete(res);
   });
 });
 
@@ -2239,7 +2312,13 @@ app.get('/api/device/:id/logs/crash', async (req, res) => {
 app.post('/api/device/:id/hardware/vibrate', async (req, res) => {
   try {
     const { id } = req.params;
-    await execAsync(`${ADB_PATH} -s ${id} shell cmd vibrator vibrate 1000`);
+    try {
+      // Android 12+ (vibrator_manager)
+      await execAsync(`${ADB_PATH} -s ${id} shell cmd vibrator_manager synced -f oneshot 1000`);
+    } catch {
+      // Android 7-11 fallback
+      await execAsync(`${ADB_PATH} -s ${id} shell cmd vibrator vibrate 1000`);
+    }
     res.json({ success: true, message: 'Comando de vibración enviado.' });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
