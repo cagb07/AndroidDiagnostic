@@ -65,7 +65,7 @@ function App() {
   const [apps, setApps] = useState<AppItem[]>([]);
   const [selectedApp, setSelectedApp] = useState<AppItem | null>(null);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'power' | 'hardware' | 'apps' | 'logs' | 'backup' | 'root' | 'bypass' | 'security' | 'maintenance' | 'terminal' | 'files' | 'screen' | 'privacy' | 'network' | 'taskmanager' | 'screentweaks' | 'deepscanner' | 'devtoggles' | 'thermal' | 'spoofing' | 'repair'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'power' | 'hardware' | 'apps' | 'logs' | 'backup' | 'root' | 'odin' | 'bypass' | 'security' | 'maintenance' | 'terminal' | 'files' | 'screen' | 'privacy' | 'network' | 'taskmanager' | 'screentweaks' | 'deepscanner' | 'devtoggles' | 'thermal' | 'spoofing' | 'repair'>('dashboard');
   const [logs, setLogs] = useState<string[]>([]);
   const [isLogging, setIsLogging] = useState(false);
   const [disclaimerAccepted, setDisclaimerAccepted] = useState(false);
@@ -172,6 +172,28 @@ function App() {
   const [isLoadingSecurityAudit, setIsLoadingSecurityAudit] = useState(false);
 
   const [showPrintReport, setShowPrintReport] = useState(false);
+
+  // Samsung Odin (OdinMac Engine) State
+  const [odinStatus, setOdinStatus] = useState<any | null>(null);
+  const [odinDeviceDetected, setOdinDeviceDetected] = useState<boolean | null>(null);
+  const [isOdinDetecting, setIsOdinDetecting] = useState(false);
+  const [isOdinRebooting, setIsOdinRebooting] = useState(false);
+  const [odinSlots, setOdinSlots] = useState<{ [key: string]: File | null }>({
+    bl: null,
+    ap: null,
+    cp: null,
+    csc: null,
+    userdata: null,
+    pit: null
+  });
+  const [odinOptions, setOdinOptions] = useState({
+    reboot: true,
+    repartition: false
+  });
+  const [isOdinFlashing, setIsOdinFlashing] = useState(false);
+  const [odinLogs, setOdinLogs] = useState<string>('');
+  const [odinPitOutput, setOdinPitOutput] = useState<string | null>(null);
+  const [isLoadingPit, setIsLoadingPit] = useState(false);
 
   const logAction = (module: string, action: string, result: string) => {
     setAuditLog(prev => [...prev, {
@@ -349,6 +371,150 @@ function App() {
     setTimeout(() => {
       window.print();
     }, 300);
+  };
+
+  // Manejadores Samsung Odin (OdinMac Engine)
+  const fetchOdinStatus = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/odin/status`);
+      if (res.data.success) {
+        setOdinStatus(res.data);
+      }
+    } catch (e) {
+      console.error('Error fetching odin status:', e);
+    }
+  };
+
+  const handleOdinDetect = async () => {
+    setIsOdinDetecting(true);
+    try {
+      const res = await axios.get(`${API_BASE}/odin/detect`);
+      setOdinDeviceDetected(res.data.detected);
+      if (res.data.detected) {
+        addToast('¡Dispositivo Samsung detectado en Modo Descarga!', 'success');
+        setOdinLogs(prev => prev + `\n[${new Date().toLocaleTimeString()}] Dispositivo detectado en Modo Descarga.`);
+      } else {
+        addToast('No se detectó dispositivo en Modo Descarga.', 'warning');
+        setOdinLogs(prev => prev + `\n[${new Date().toLocaleTimeString()}] No se detectó dispositivo en Modo Descarga.`);
+      }
+    } catch (e: any) {
+      addToast('Error al consultar Modo Descarga', 'error');
+    } finally {
+      setIsOdinDetecting(false);
+    }
+  };
+
+  const handleOdinRebootDownload = async () => {
+    if (!selectedDevice) {
+      addToast('Selecciona un dispositivo conectado por USB primero', 'error');
+      return;
+    }
+    setIsOdinRebooting(true);
+    try {
+      const res = await axios.post(`${API_BASE}/odin/reboot-download`, { id: selectedDevice });
+      if (res.data.success) {
+        addToast(res.data.message, 'success');
+        setOdinLogs(prev => prev + `\n[${new Date().toLocaleTimeString()}] Reiniciando ${selectedDevice} en Modo Descarga...`);
+        setTimeout(() => handleOdinDetect(), 4000);
+      }
+    } catch (e: any) {
+      addToast(e.response?.data?.error || e.message, 'error');
+    } finally {
+      setIsOdinRebooting(false);
+    }
+  };
+
+  const handleOdinPrintPit = async () => {
+    setIsLoadingPit(true);
+    try {
+      const res = await axios.get(`${API_BASE}/odin/print-pit`);
+      if (res.data.success) {
+        setOdinPitOutput(res.data.output);
+        addToast('Tabla PIT leída correctamente', 'success');
+        setOdinLogs(prev => prev + `\n[${new Date().toLocaleTimeString()}] Tabla de particiones PIT leída:\n` + res.data.output.slice(0, 400) + '...');
+      } else {
+        addToast(res.data.error, 'error');
+      }
+    } catch (e: any) {
+      addToast(e.response?.data?.error || 'Error al leer PIT', 'error');
+    } finally {
+      setIsLoadingPit(false);
+    }
+  };
+
+  const handleOdinDownloadPit = async () => {
+    setIsLoadingPit(true);
+    try {
+      const res = await axios.post(`${API_BASE}/odin/download-pit`);
+      if (res.data.success) {
+        addToast(`PIT descargado: ${res.data.pitFile}`, 'success');
+        setOdinLogs(prev => prev + `\n[${new Date().toLocaleTimeString()}] Archivo PIT guardado en servidor: ${res.data.pitFile}`);
+      } else {
+        addToast(res.data.error || 'Error al descargar PIT', 'error');
+      }
+    } catch (e: any) {
+      addToast(e.response?.data?.error || 'Error al descargar PIT', 'error');
+    } finally {
+      setIsLoadingPit(false);
+    }
+  };
+
+  const handleOdinLaunchApp = async () => {
+    try {
+      const res = await axios.post(`${API_BASE}/odin/launch-app`);
+      if (res.data.success) {
+        addToast(res.data.message, 'success');
+      }
+    } catch (e: any) {
+      addToast(e.response?.data?.error || 'Error al abrir OdinMac.app', 'error');
+    }
+  };
+
+  const handleOdinFileChange = (slot: string, file: File | null) => {
+    setOdinSlots(prev => ({ ...prev, [slot]: file }));
+  };
+
+  const handleOdinFlash = async () => {
+    const hasFiles = Object.values(odinSlots).some(f => f !== null);
+    if (!hasFiles) {
+      addToast('Selecciona al menos un archivo de firmware (BL, AP, CP o CSC)', 'error');
+      return;
+    }
+
+    if (odinOptions.repartition && !odinSlots.pit && !odinSlots.csc) {
+      addToast('Re-Partition requiere un archivo PIT explícito o un paquete CSC', 'warning');
+    }
+
+    setIsOdinFlashing(true);
+    setOdinLogs(prev => prev + `\n\n===============================\n[${new Date().toLocaleTimeString()}] INICIANDO FLASHEO SAMSUNG ODIN...\n===============================`);
+    
+    const formData = new FormData();
+    Object.entries(odinSlots).forEach(([key, file]) => {
+      if (file) formData.append(key, file);
+    });
+    formData.append('reboot', String(odinOptions.reboot));
+    formData.append('repartition', String(odinOptions.repartition));
+
+    try {
+      const res = await axios.post(`${API_BASE}/odin/flash`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 600000
+      });
+      if (res.data.success) {
+        addToast('¡Flasheo Samsung completado con éxito!', 'success');
+        setOdinLogs(prev => prev + '\n' + res.data.logs);
+      } else {
+        addToast('Fallo en el flasheo Samsung', 'error');
+        setOdinLogs(prev => prev + '\n' + res.data.logs);
+      }
+    } catch (e: any) {
+      const errMsg = e.response?.data?.error || e.message;
+      const errLogs = e.response?.data?.logs || '';
+      addToast(`Error durante el flasheo: ${errMsg}`, 'error');
+      setOdinLogs(prev => prev + `\n[ERROR] ${errMsg}\n` + errLogs);
+    } finally {
+      setIsOdinFlashing(false);
+    }
   };
 
   const openReportBuilder = () => {
@@ -900,6 +1066,10 @@ function App() {
     if (activeTab === 'screen' && !isLiveScreen) fetchScreenshot();
     if (activeTab === 'deepscanner') fetchDeepInfo();
     if (activeTab === 'security') fetchSecurityAudit();
+    if (activeTab === 'odin') {
+      fetchOdinStatus();
+      handleOdinDetect();
+    }
   }, [activeTab, selectedDevice]);
 
   useEffect(() => {
@@ -1509,6 +1679,10 @@ function App() {
             <ShieldAlert className="w-4 h-4" />
             <span>Root y Flasheo</span>
           </button>
+          <button onClick={() => setActiveTab('odin')} className={`w-full flex items-center space-x-3 px-4 py-2.5 rounded-xl transition-all font-medium text-sm ${activeTab === 'odin' ? 'bg-sky-500/20 text-sky-400 shadow-[inset_0_0_20px_rgba(14,165,233,0.1)] border border-sky-500/20' : 'hover:bg-[#0a0a0f] text-slate-400 hover:text-slate-200 border border-transparent'}`}>
+            <Flame className="w-4 h-4 text-sky-400" />
+            <span>Samsung Odin (Heimdall)</span>
+          </button>
           <button onClick={() => setActiveTab('bypass')} className={`w-full flex items-center space-x-3 px-4 py-2.5 rounded-xl transition-all font-medium text-sm ${activeTab === 'bypass' ? 'bg-violet-500/20 text-violet-400 shadow-[inset_0_0_20px_rgba(139,92,246,0.1)] border border-violet-500/20' : 'hover:bg-[#0a0a0f] text-slate-400 hover:text-slate-200 border border-transparent'}`}>
             <Unlock className="w-4 h-4" />
             <span>Bypass y Fuerza Bruta</span>
@@ -1532,17 +1706,18 @@ function App() {
                     activeTab === 'logs' ? 'Consola Logcat' :
                       activeTab === 'backup' ? 'Copias de Seguridad' :
                         activeTab === 'root' ? 'Root y Flasheo' :
-                          activeTab === 'terminal' ? 'Terminal ADB Directa' :
-                            activeTab === 'files' ? 'Explorador de Archivos' :
-                              activeTab === 'screen' ? 'Transmisión de Pantalla' :
-                                activeTab === 'privacy' ? 'Gestor Extremo de Privacidad' :
-                                  activeTab === 'network' ? 'Escáner de Red y Conectividad' :
-                                    activeTab === 'taskmanager' ? 'Gestor de Tareas en Vivo' :
-                                      activeTab === 'screentweaks' ? 'Ajustes Visuales (Resolución/DPI)' :
-                                        activeTab === 'devtoggles' ? 'Opciones de Desarrollador' :
-                                          activeTab === 'thermal' ? 'Perfilador Térmico y Estrés' :
-                                            activeTab === 'spoofing' ? 'Spoofing de Hardware (Modo Dev)' :
-                                              'Diagnóstico de Seguridad'}
+                          activeTab === 'odin' ? 'Samsung Odin Flasher (OdinMac)' :
+                            activeTab === 'terminal' ? 'Terminal ADB Directa' :
+                              activeTab === 'files' ? 'Explorador de Archivos' :
+                                activeTab === 'screen' ? 'Transmisión de Pantalla' :
+                                  activeTab === 'privacy' ? 'Gestor Extremo de Privacidad' :
+                                    activeTab === 'network' ? 'Escáner de Red y Conectividad' :
+                                      activeTab === 'taskmanager' ? 'Gestor de Tareas en Vivo' :
+                                        activeTab === 'screentweaks' ? 'Ajustes Visuales (Resolución/DPI)' :
+                                          activeTab === 'devtoggles' ? 'Opciones de Desarrollador' :
+                                            activeTab === 'thermal' ? 'Perfilador Térmico y Estrés' :
+                                              activeTab === 'spoofing' ? 'Spoofing de Hardware (Modo Dev)' :
+                                                'Diagnóstico de Seguridad'}
           </h2>
           <div className="flex space-x-3">
             <button
@@ -2564,6 +2739,304 @@ function App() {
                         )}
                       </div>
                     )}
+
+                    {/* SAMSUNG ODIN FLASHER (ODINMAC ENGINE / HEIMDALL) TAB */}
+                    {activeTab === 'odin' && (
+                      <div className="space-y-8">
+                        {/* Header Banner */}
+                        <div className="bg-slate-900/60 border border-sky-500/30 rounded-3xl p-6 sm:p-8 backdrop-blur-xl shadow-2xl relative overflow-hidden">
+                          <div className="absolute top-0 right-0 w-96 h-96 bg-sky-500/10 rounded-full blur-3xl pointer-events-none"></div>
+
+                          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 relative z-10">
+                            <div className="flex items-start space-x-4">
+                              <div className="p-4 bg-sky-950/80 border border-sky-500/40 rounded-2xl text-sky-400 shadow-[0_0_20px_rgba(14,165,233,0.2)]">
+                                <Flame className="w-8 h-8 animate-pulse" />
+                              </div>
+                              <div>
+                                <div className="flex items-center space-x-3 mb-1">
+                                  <h3 className="text-2xl font-black text-white tracking-wide">Samsung Odin Flasher</h3>
+                                  <span className="bg-sky-500/20 text-sky-300 text-xs font-mono px-2.5 py-0.5 rounded-full border border-sky-500/30 font-bold">
+                                    OdinMac Engine
+                                  </span>
+                                </div>
+                                <p className="text-sm text-slate-400 max-w-2xl">
+                                  Flasheo nativo de firmware oficial Samsung (.tar.md5 / .tar / .lz4 / .pit) mediante protocolo Odin / Heimdall. Sin necesidad de Windows ni máquinas virtuales.
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Badges de Estado */}
+                            <div className="flex flex-wrap items-center gap-2 font-mono text-xs">
+                              {odinDeviceDetected === true ? (
+                                <span className="flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-950/60 border border-emerald-500/50 text-emerald-400 rounded-xl shadow-md">
+                                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                                  <span className="font-bold">Modo Descarga: DETECTADO</span>
+                                </span>
+                              ) : odinDeviceDetected === false ? (
+                                <span className="flex items-center space-x-1.5 px-3 py-1.5 bg-amber-950/60 border border-amber-500/40 text-amber-400 rounded-xl">
+                                  <AlertTriangle className="w-3.5 h-3.5" />
+                                  <span>Modo Descarga: NO DETECTADO</span>
+                                </span>
+                              ) : (
+                                <span className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-800/80 border border-slate-700 text-slate-400 rounded-xl">
+                                  <RefreshCw className="w-3.5 h-3.5" />
+                                  <span>Estado: Sin comprobar</span>
+                                </span>
+                              )}
+
+                              <span className="px-3 py-1.5 bg-slate-800/80 border border-slate-700 text-slate-300 rounded-xl">
+                                Heimdall: <strong className="text-cyan-400">{odinStatus?.version || 'v1.4.2'}</strong>
+                              </span>
+
+                              {odinStatus?.odinMacInstalled && (
+                                <button
+                                  onClick={handleOdinLaunchApp}
+                                  className="flex items-center space-x-1.5 px-3 py-1.5 bg-indigo-950/60 hover:bg-indigo-900/60 border border-indigo-500/40 text-indigo-300 hover:text-white rounded-xl transition-all shadow-md"
+                                  title="Lanzar aplicación nativa OdinMac en macOS"
+                                >
+                                  <MonitorPlay className="w-3.5 h-3.5 text-indigo-400" />
+                                  <span>Abrir OdinMac Desktop</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Quick Actions Bar */}
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-6 border-t border-slate-800">
+                            <button
+                              onClick={handleOdinDetect}
+                              disabled={isOdinDetecting}
+                              className="py-2.5 px-4 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 hover:border-sky-500/40 text-slate-200 rounded-xl text-xs font-semibold flex items-center justify-center space-x-2 transition-all"
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 text-sky-400 ${isOdinDetecting ? 'animate-spin' : ''}`} />
+                              <span>{isOdinDetecting ? 'Consultando...' : 'Detectar Modo Odin'}</span>
+                            </button>
+
+                            <button
+                              onClick={handleOdinRebootDownload}
+                              disabled={isOdinRebooting || !selectedDevice}
+                              className="py-2.5 px-4 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 hover:border-emerald-500/40 text-slate-200 rounded-xl text-xs font-semibold flex items-center justify-center space-x-2 transition-all disabled:opacity-50"
+                              title="Reinicia el dispositivo conectado por cable USB al Modo Descarga (Odin)"
+                            >
+                              <Zap className="w-3.5 h-3.5 text-amber-400" />
+                              <span>{isOdinRebooting ? 'Reiniciando...' : 'Reiniciar a Download'}</span>
+                            </button>
+
+                            <button
+                              onClick={handleOdinPrintPit}
+                              disabled={isLoadingPit}
+                              className="py-2.5 px-4 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 hover:border-indigo-500/40 text-slate-200 rounded-xl text-xs font-semibold flex items-center justify-center space-x-2 transition-all disabled:opacity-50"
+                            >
+                              <Database className="w-3.5 h-3.5 text-indigo-400" />
+                              <span>{isLoadingPit ? 'Leyendo...' : 'Inspeccionar PIT'}</span>
+                            </button>
+
+                            <button
+                              onClick={handleOdinDownloadPit}
+                              disabled={isLoadingPit}
+                              className="py-2.5 px-4 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 hover:border-cyan-500/40 text-slate-200 rounded-xl text-xs font-semibold flex items-center justify-center space-x-2 transition-all disabled:opacity-50"
+                            >
+                              <HardDriveDownload className="w-3.5 h-3.5 text-cyan-400" />
+                              <span>Descargar Archivo PIT</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Odin 5-Slot Matrix (+ PIT) */}
+                        <div className="bg-slate-900/40 border border-slate-800 rounded-3xl p-6 sm:p-8 backdrop-blur-xl shadow-2xl space-y-6">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <h4 className="text-xl font-bold text-white tracking-wide">Ranuras de Firmware Oficial (Odin Slots)</h4>
+                              <p className="text-xs text-slate-400 mt-0.5">Arrastra o selecciona los archivos correspondientes a cada partición oficial</p>
+                            </div>
+                            <span className="text-xs font-mono text-slate-500 bg-slate-800 px-3 py-1 rounded-lg border border-slate-700">
+                              Formatos: .tar.md5, .tar, .bin, .img, .lz4, .pit
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {[
+                              { id: 'bl', label: 'BL', title: 'Bootloader', desc: 'sboot.bin, param.bin, tz.mbn (Arranque Seguro)', color: 'border-blue-500/40 text-blue-400 bg-blue-950/20' },
+                              { id: 'ap', label: 'AP', title: 'Sistema Operativo (PDA)', desc: 'boot.img, recovery.img, system, vendor (OS Principal)', color: 'border-cyan-500/40 text-cyan-400 bg-cyan-950/20' },
+                              { id: 'cp', label: 'CP', title: 'Módem / Banda Base (Phone)', desc: 'modem.bin, NON-HLOS.bin (Radio / Conectividad Celular)', color: 'border-purple-500/40 text-purple-400 bg-purple-950/20' },
+                              { id: 'csc', label: 'CSC', title: 'Región & Operador (CSC / HOME_CSC)', desc: 'CSC = Factory Reset | HOME_CSC = Conserva Datos', color: 'border-amber-500/40 text-amber-400 bg-amber-950/20' },
+                              { id: 'userdata', label: 'USERDATA', title: 'Datos Carrier (Opcional)', desc: 'Imágenes personalizadas del operador o usuario', color: 'border-indigo-500/40 text-indigo-400 bg-indigo-950/20' },
+                              { id: 'pit', label: 'PIT', title: 'Tabla de Particionado (Opcional)', desc: 'Partition Information Table para re-particionar', color: 'border-yellow-500/40 text-yellow-400 bg-yellow-950/20' }
+                            ].map(slot => {
+                              const currentFile = odinSlots[slot.id];
+                              return (
+                                <div key={slot.id} className="bg-slate-800/60 border border-slate-700/70 rounded-2xl p-4 flex flex-col justify-between hover:border-slate-600 transition-all">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <div className="flex items-center space-x-2">
+                                      <span className={`px-2 py-0.5 font-mono text-xs font-black rounded border ${slot.color}`}>
+                                        {slot.label}
+                                      </span>
+                                      <span className="text-sm font-bold text-slate-200">{slot.title}</span>
+                                    </div>
+                                    {currentFile && (
+                                      <button
+                                        onClick={() => handleOdinFileChange(slot.id, null)}
+                                        className="text-slate-500 hover:text-red-400 p-1 rounded transition-colors"
+                                        title="Quitar archivo"
+                                      >
+                                        <X className="w-4 h-4" />
+                                      </button>
+                                    )}
+                                  </div>
+                                  <p className="text-[11px] text-slate-400 mb-3 line-clamp-1">{slot.desc}</p>
+
+                                  {currentFile ? (
+                                    <div className="bg-slate-900/80 border border-slate-700 p-2.5 rounded-xl font-mono text-xs text-slate-300 flex items-center justify-between">
+                                      <div className="truncate pr-2 font-semibold text-white">
+                                        {currentFile.name}
+                                      </div>
+                                      <span className="text-[10px] text-slate-400 flex-shrink-0">
+                                        {(currentFile.size / (1024 * 1024)).toFixed(1)} MB
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <label className="cursor-pointer border-2 border-dashed border-slate-700 hover:border-sky-500/50 hover:bg-sky-500/5 py-2.5 px-3 rounded-xl text-center text-xs text-slate-400 hover:text-sky-300 transition-all flex items-center justify-center space-x-2">
+                                      <Upload className="w-3.5 h-3.5" />
+                                      <span>Seleccionar archivo</span>
+                                      <input
+                                        type="file"
+                                        className="hidden"
+                                        onChange={(e) => {
+                                          if (e.target.files && e.target.files[0]) {
+                                            handleOdinFileChange(slot.id, e.target.files[0]);
+                                          }
+                                        }}
+                                      />
+                                    </label>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          {/* Options & Action */}
+                          <div className="pt-4 border-t border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                            <div className="flex items-center space-x-6 text-sm text-slate-300">
+                              <label className="flex items-center space-x-2 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={odinOptions.reboot}
+                                  onChange={(e) => setOdinOptions(prev => ({ ...prev, reboot: e.target.checked }))}
+                                  className="rounded bg-slate-800 border-slate-700 text-sky-500 focus:ring-0"
+                                />
+                                <span className="text-xs font-medium">Auto-Reboot al finalizar</span>
+                              </label>
+
+                              <label className="flex items-center space-x-2 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={odinOptions.repartition}
+                                  onChange={(e) => setOdinOptions(prev => ({ ...prev, repartition: e.target.checked }))}
+                                  className="rounded bg-slate-800 border-slate-700 text-amber-500 focus:ring-0"
+                                />
+                                <span className="text-xs font-medium text-amber-300">Re-Partition (Sobrescribir PIT)</span>
+                              </label>
+                            </div>
+
+                            <button
+                              onClick={handleOdinFlash}
+                              disabled={isOdinFlashing || !Object.values(odinSlots).some(f => f !== null)}
+                              className={`py-3.5 px-8 rounded-xl font-bold transition-all text-sm flex items-center justify-center space-x-3 shadow-lg ${isOdinFlashing || !Object.values(odinSlots).some(f => f !== null) ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700' : 'bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white shadow-[0_0_25px_rgba(14,165,233,0.4)]'}`}
+                            >
+                              {isOdinFlashing ? (
+                                <>
+                                  <RefreshCw className="w-5 h-5 animate-spin" />
+                                  <span>Flasheando Dispositivo Samsung...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Flame className="w-5 h-5" />
+                                  <span>INICIAR FLASHEO SAMSUNG (ODIN)</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Terminal & Output Logs */}
+                        <div className="bg-slate-900/60 border border-slate-800 rounded-3xl p-6 backdrop-blur-xl shadow-2xl space-y-3">
+                          <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                            <div className="flex items-center space-x-2 text-slate-300 text-sm font-semibold">
+                              <Terminal className="w-4 h-4 text-sky-400" />
+                              <span>Consola de Salida de Flasheo (Live Log)</span>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                              {odinLogs && (
+                                <button
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(odinLogs);
+                                    addToast('Log copiado al portapapeles', 'info');
+                                  }}
+                                  className="text-xs px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg flex items-center space-x-1"
+                                >
+                                  <Copy className="w-3 h-3" />
+                                  <span>Copiar</span>
+                                </button>
+                              )}
+                              <button
+                                onClick={() => setOdinLogs('')}
+                                className="text-xs px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg"
+                              >
+                                Limpiar
+                              </button>
+                            </div>
+                          </div>
+                          <div className="bg-black/90 p-4 rounded-xl font-mono text-xs text-sky-300/90 h-64 overflow-y-auto custom-scrollbar whitespace-pre-wrap">
+                            {odinLogs || '// Esperando comando o sesión de flasheo. Conecta tu teléfono Samsung en Modo Descarga y selecciona los paquetes oficiales.'}
+                          </div>
+                        </div>
+
+                        {/* Visor de Tabla PIT si fue descargada */}
+                        {odinPitOutput && (
+                          <div className="bg-slate-900/60 border border-indigo-500/30 rounded-3xl p-6 backdrop-blur-xl shadow-2xl space-y-3">
+                            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                              <div className="flex items-center space-x-2 text-indigo-300 text-sm font-semibold">
+                                <Database className="w-4 h-4 text-indigo-400" />
+                                <span>Estructura de Particiones PIT (Chip Flash del Dispositivo)</span>
+                              </div>
+                              <button
+                                onClick={() => setOdinPitOutput(null)}
+                                className="text-xs px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg"
+                              >
+                                Ocultar
+                              </button>
+                            </div>
+                            <div className="bg-black/90 p-4 rounded-xl font-mono text-xs text-indigo-300/80 max-h-60 overflow-y-auto custom-scrollbar whitespace-pre-wrap">
+                              {odinPitOutput}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Guía Rápida de Modo Descarga */}
+                        <div className="bg-slate-900/30 border border-slate-800/80 rounded-2xl p-6 space-y-3">
+                          <h5 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center space-x-2">
+                            <Info className="w-4 h-4 text-sky-400" />
+                            <span>Cómo entrar en Samsung Download Mode (Modo Odin)</span>
+                          </h5>
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs text-slate-400">
+                            <div className="bg-slate-800/40 p-3 rounded-xl border border-slate-800">
+                              <div className="font-bold text-slate-200 mb-1">Samsung Modernos (S20/S21/S22/S23/S24/A-Series)</div>
+                              <p>Apaga el teléfono. Mantén presionados <strong className="text-sky-300">Volumen Arriba + Volumen Abajo</strong> y conecta el cable USB a la Mac. Presiona Vol Arriba en la pantalla azul de advertencia.</p>
+                            </div>
+                            <div className="bg-slate-800/40 p-3 rounded-xl border border-slate-800">
+                              <div className="font-bold text-slate-200 mb-1">Dispositivos con Botón Bixby</div>
+                              <p>Apaga el dispositivo. Mantén presionados <strong className="text-sky-300">Volumen Abajo + Bixby + Power</strong> hasta que aparezca la pantalla de advertencia y confirma.</p>
+                            </div>
+                            <div className="bg-slate-800/40 p-3 rounded-xl border border-slate-800">
+                              <div className="font-bold text-slate-200 mb-1">Dispositivos con Botón Físico Home</div>
+                              <p>Apaga el dispositivo. Mantén presionados <strong className="text-sky-300">Volumen Abajo + Botón Home + Power</strong> simultáneamente y confirma con Volumen Arriba.</p>
+                            </div>
+                          </div>
+                        </div>
+
+                      </div>
+                    )}
+
                     {/* BYPASS AND UNLOCK TAB */}
                     {activeTab === 'bypass' && (
                       <div className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 backdrop-blur-sm space-y-6">

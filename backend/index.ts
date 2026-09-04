@@ -24,6 +24,8 @@ process.env.PATH = `${process.env.PATH}:/usr/local/bin:/opt/homebrew/bin:${path.
 function resolveBinaryPath(name: string): string {
   const home = process.env.HOME || process.env.USERPROFILE || '';
   const candidates = [
+    path.join(__dirname, 'bin', name),
+    `/Applications/OdinMac.app/Contents/Resources/${name}`,
     process.env.ANDROID_HOME ? path.join(process.env.ANDROID_HOME, 'platform-tools', name) : '',
     process.env.ANDROID_SDK_ROOT ? path.join(process.env.ANDROID_SDK_ROOT, 'platform-tools', name) : '',
     path.join(home, 'Library/Android/sdk/platform-tools', name),
@@ -44,7 +46,8 @@ function resolveBinaryPath(name: string): string {
 
 const ADB_PATH = resolveBinaryPath('adb');
 const FASTBOOT_PATH = resolveBinaryPath('fastboot');
-console.log(`[ADB] Using: ${ADB_PATH}, [FASTBOOT] Using: ${FASTBOOT_PATH}`);
+const HEIMDALL_PATH = resolveBinaryPath('heimdall');
+console.log(`[ADB] Using: ${ADB_PATH}, [FASTBOOT] Using: ${FASTBOOT_PATH}, [HEIMDALL] Using: ${HEIMDALL_PATH}`);
 
 const client = adb.createClient({ bin: ADB_PATH });
 const app = express();
@@ -2652,6 +2655,304 @@ app.get('/api/device/:id/security/audit', async (req, res) => {
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ==========================================
+// SAMSUNG ODIN FLASHER (ODINMAC ENGINE / HEIMDALL)
+// ==========================================
+
+// Check status of Heimdall & OdinMac.app
+app.get('/api/odin/status', async (req, res) => {
+  try {
+    let version = '';
+    let available = false;
+    try {
+      const { stdout } = await execAsync(`"${HEIMDALL_PATH}" version`);
+      version = stdout.trim();
+      available = true;
+    } catch {
+      available = false;
+    }
+
+    const odinMacInstalled = fs.existsSync('/Applications/OdinMac.app');
+    res.json({
+      success: true,
+      available,
+      version,
+      heimdallPath: HEIMDALL_PATH,
+      odinMacInstalled,
+      odinMacPath: odinMacInstalled ? '/Applications/OdinMac.app' : null
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Detect Samsung device in Download Mode
+app.get('/api/odin/detect', async (req, res) => {
+  try {
+    try {
+      const { stdout } = await execAsync(`"${HEIMDALL_PATH}" detect`);
+      const detected = stdout.toLowerCase().includes('device detected');
+      res.json({ success: true, detected, output: stdout.trim() });
+    } catch (detectErr: any) {
+      const out = (detectErr.stdout || '') + (detectErr.stderr || detectErr.message || '');
+      const detected = out.toLowerCase().includes('device detected');
+      res.json({ success: true, detected, output: out.trim() });
+    }
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Reboot connected ADB device to Samsung Download Mode
+app.post('/api/odin/reboot-download', async (req, res) => {
+  const { id } = req.body;
+  if (!id) {
+    return res.status(400).json({ success: false, error: 'Se requiere ID de dispositivo' });
+  }
+  try {
+    await execAsync(`"${ADB_PATH}" -s ${id} reboot download`);
+    res.json({
+      success: true,
+      message: 'Comando enviado: El dispositivo se está reiniciando en Modo Descarga (Odin Mode)'
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Download PIT file from device
+app.post('/api/odin/download-pit', async (req, res) => {
+  const pitFile = path.join(uploadDir, `device_${Date.now()}.pit`);
+  try {
+    const { stdout, stderr } = await execAsync(`"${HEIMDALL_PATH}" download-pit --output "${pitFile}" --no-reboot`);
+    res.json({
+      success: true,
+      message: 'Tabla de particiones (PIT) descargada con éxito',
+      pitFile: path.basename(pitFile),
+      output: (stdout + '\n' + stderr).trim()
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message, output: (err.stdout || '') + (err.stderr || '') });
+  }
+});
+
+// Print PIT table from device
+app.get('/api/odin/print-pit', async (req, res) => {
+  try {
+    const { stdout, stderr } = await execAsync(`"${HEIMDALL_PATH}" print-pit --no-reboot`);
+    res.json({
+      success: true,
+      output: (stdout || stderr).trim()
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: 'No se pudo leer el PIT del dispositivo. Asegúrate de que el teléfono esté en Modo Descarga.',
+      output: (err.stdout || '') + (err.stderr || '')
+    });
+  }
+});
+
+// Launch native OdinMac application on macOS
+app.post('/api/odin/launch-app', async (req, res) => {
+  try {
+    if (fs.existsSync('/Applications/OdinMac.app')) {
+      await execAsync('open /Applications/OdinMac.app');
+      return res.json({ success: true, message: 'OdinMac.app abierto correctamente en macOS' });
+    }
+    await execAsync('open -a OdinMac');
+    res.json({ success: true, message: 'OdinMac abierto en macOS' });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: 'No se pudo iniciar OdinMac.app. Verifica que esté en /Applications: ' + err.message
+    });
+  }
+});
+
+function mapImageNameToPartition(filename: string): string | null {
+  const base = filename.toLowerCase();
+  if (base.startsWith('boot.img')) return 'BOOT';
+  if (base.startsWith('recovery.img')) return 'RECOVERY';
+  if (base.startsWith('system.img')) return 'SYSTEM';
+  if (base.startsWith('vendor.img')) return 'VENDOR';
+  if (base.startsWith('userdata.img')) return 'USERDATA';
+  if (base.startsWith('modem.bin') || base.startsWith('modem.img')) return 'RADIO';
+  if (base.startsWith('sboot.bin')) return 'BOOTLOADER';
+  if (base.startsWith('param.bin')) return 'PARAM';
+  if (base.startsWith('tz.mbn') || base.startsWith('tz.img')) return 'TZ';
+  if (base.startsWith('vbmeta.img')) return 'VBMETA';
+  if (base.startsWith('vbmeta_samsung.img')) return 'VBMETA_SAMSUNG';
+  if (base.startsWith('dtbo.img')) return 'DTBO';
+  if (base.startsWith('super.img')) return 'SUPER';
+  if (base.startsWith('cache.img')) return 'CACHE';
+  if (base.startsWith('prism.img')) return 'PRISM';
+  if (base.startsWith('optics.img')) return 'OPTICS';
+  if (base.startsWith('efs.img')) return 'EFS';
+  if (base.startsWith('sec_efs.img')) return 'SEC_EFS';
+  const parts = filename.split('.');
+  if (parts.length > 0 && parts[0].length >= 2) {
+    return parts[0].toUpperCase();
+  }
+  return null;
+}
+
+// Flash firmware via Heimdall (Odin protocol)
+app.post('/api/odin/flash', upload.fields([
+  { name: 'bl', maxCount: 1 },
+  { name: 'ap', maxCount: 1 },
+  { name: 'cp', maxCount: 1 },
+  { name: 'csc', maxCount: 1 },
+  { name: 'userdata', maxCount: 1 },
+  { name: 'pit', maxCount: 1 }
+]), async (req, res) => {
+  const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
+  const { reboot = 'true', repartition = 'false' } = req.body;
+  const shouldReboot = reboot === 'true' || reboot === true;
+  const shouldRepartition = repartition === 'true' || repartition === true;
+
+  const sessionDir = path.join(uploadDir, `odin_session_${Date.now()}`);
+  fs.mkdirSync(sessionDir, { recursive: true });
+
+  const logs: string[] = [];
+  const log = (msg: string) => logs.push(`[${new Date().toLocaleTimeString()}] ${msg}`);
+
+  try {
+    log('Iniciando sesión de flasheo Samsung Odin (Heimdall)...');
+
+    // Verify download mode
+    try {
+      const { stdout: detOut } = await execAsync(`"${HEIMDALL_PATH}" detect`);
+      if (!detOut.toLowerCase().includes('device detected')) {
+        throw new Error('No se detectó ningún dispositivo Samsung en Modo Descarga.');
+      }
+      log('Dispositivo Samsung en Modo Descarga detectado.');
+    } catch (e: any) {
+      throw new Error('No se detectó el dispositivo en Modo Descarga. Conecta el cable en Modo Odin.');
+    }
+
+    // Process files
+    const slotKeys = ['bl', 'ap', 'cp', 'csc', 'userdata', 'pit'];
+    const extractedImages: { partition: string; filePath: string }[] = [];
+    let customPitPath: string | null = null;
+
+    if (files && files.pit && files.pit[0]) {
+      customPitPath = files.pit[0].path;
+      log(`Archivo PIT provisto por usuario: ${files.pit[0].originalname}`);
+    }
+
+    for (const key of slotKeys) {
+      if (key === 'pit') continue;
+      if (files && files[key] && files[key][0]) {
+        const file = files[key][0];
+        const slotName = key.toUpperCase();
+        log(`Procesando paquete ${slotName}: ${file.originalname}`);
+
+        const ext = path.extname(file.originalname).toLowerCase();
+        if (ext === '.md5' || ext === '.tar' || file.originalname.endsWith('.tar.md5')) {
+          const extractSubdir = path.join(sessionDir, key);
+          fs.mkdirSync(extractSubdir, { recursive: true });
+          log(`Extrayendo archivo tar ${file.originalname}...`);
+          await execAsync(`tar -xf "${file.path}" -C "${extractSubdir}"`);
+
+          const extractedItems = fs.readdirSync(extractSubdir);
+          for (const item of extractedItems) {
+            let itemPath = path.join(extractSubdir, item);
+            let itemName = item;
+
+            if (item.endsWith('.lz4')) {
+              const decompressed = itemPath.slice(0, -4);
+              log(`Descomprimiendo LZ4: ${item} -> ${path.basename(decompressed)}`);
+              await execAsync(`lz4 -d -f "${itemPath}" "${decompressed}"`);
+              itemPath = decompressed;
+              itemName = path.basename(decompressed);
+            }
+
+            if (itemName.endsWith('.pit') && !customPitPath) {
+              customPitPath = itemPath;
+              log(`PIT detectado dentro del firmware: ${itemName}`);
+              continue;
+            }
+
+            const partName = mapImageNameToPartition(itemName);
+            if (partName) {
+              extractedImages.push({ partition: partName, filePath: itemPath });
+              log(`Mapeado: ${itemName} -> Partición [${partName}]`);
+            }
+          }
+        } else {
+          let itemPath = file.path;
+          let itemName = file.originalname;
+          if (itemName.endsWith('.lz4')) {
+            const decompressed = path.join(sessionDir, itemName.slice(0, -4));
+            await execAsync(`lz4 -d -f "${itemPath}" "${decompressed}"`);
+            itemPath = decompressed;
+            itemName = path.basename(decompressed);
+          }
+          const partName = mapImageNameToPartition(itemName);
+          if (partName) {
+            extractedImages.push({ partition: partName, filePath: itemPath });
+            log(`Mapeado archivo directo: ${itemName} -> [${partName}]`);
+          }
+        }
+      }
+    }
+
+    if (extractedImages.length === 0) {
+      throw new Error('No se encontraron imágenes válidas para flashear en los paquetes seleccionados.');
+    }
+
+    let flashCmd = `"${HEIMDALL_PATH}" flash`;
+    if (!shouldReboot) {
+      flashCmd += ' --no-reboot';
+    }
+    if (customPitPath) {
+      if (shouldRepartition) {
+        flashCmd += ` --repartition --pit "${customPitPath}"`;
+      } else {
+        flashCmd += ` --use-local-pit --pit "${customPitPath}"`;
+      }
+    }
+
+    const partitionMap = new Map<string, string>();
+    for (const img of extractedImages) {
+      partitionMap.set(img.partition, img.filePath);
+    }
+
+    for (const [partition, imgPath] of partitionMap.entries()) {
+      flashCmd += ` --${partition} "${imgPath}"`;
+    }
+
+    log(`Ejecutando Heimdall con ${partitionMap.size} particiones...`);
+
+    const { stdout, stderr } = await execAsync(flashCmd);
+    log('Flasheo completado con éxito.');
+    const fullLog = logs.join('\n') + '\n\n' + stdout + '\n' + stderr;
+
+    try {
+      fs.rmSync(sessionDir, { recursive: true, force: true });
+    } catch {}
+
+    res.json({
+      success: true,
+      message: 'Flasheo Samsung completado exitosamente.',
+      logs: fullLog
+    });
+
+  } catch (err: any) {
+    log(`ERROR: ${err.message}`);
+    try {
+      fs.rmSync(sessionDir, { recursive: true, force: true });
+    } catch {}
+
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      logs: logs.join('\n') + '\n' + (err.stdout || '') + '\n' + (err.stderr || '')
+    });
   }
 });
 
