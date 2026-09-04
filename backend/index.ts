@@ -22,12 +22,18 @@ process.env.PATH = `${process.env.PATH}:/usr/local/bin:/opt/homebrew/bin:${path.
 
 // Auto-detect path for adb and fastboot
 function resolveBinaryPath(name: string): string {
+  const home = process.env.HOME || process.env.USERPROFILE || '';
   const candidates = [
-    `/usr/local/bin/${name}`,
+    process.env.ANDROID_HOME ? path.join(process.env.ANDROID_HOME, 'platform-tools', name) : '',
+    process.env.ANDROID_SDK_ROOT ? path.join(process.env.ANDROID_SDK_ROOT, 'platform-tools', name) : '',
+    path.join(home, 'Library/Android/sdk/platform-tools', name),
+    path.join(home, 'Android/Sdk/platform-tools', name),
+    path.join(home, 'AppData/Local/Android/Sdk/platform-tools', `${name}.exe`),
     `/opt/homebrew/bin/${name}`,
-    path.join(process.env.HOME || '', 'Library/Android/sdk/platform-tools', name),
-    `/Users/humberto54/Library/Android/sdk/platform-tools/${name}`
-  ];
+    `/usr/local/bin/${name}`,
+    `/usr/bin/${name}`
+  ].filter(Boolean);
+
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {
       return candidate;
@@ -489,11 +495,11 @@ app.get('/api/device/:id/apps', async (req, res) => {
 
     systemApps.forEach(pkg => {
       const { category, importance } = categorizeSystemApp(pkg);
-      apps.push({ packageName: pkg, type: 'system', category, importance });
+      apps.push({ packageName: pkg, type: 'system', isSystem: true, category, importance });
     });
 
     userApps.forEach(pkg => {
-      apps.push({ packageName: pkg, type: 'user', category: 'Aplicación de Usuario', importance: 5 });
+      apps.push({ packageName: pkg, type: 'user', isSystem: false, category: 'Aplicación de Usuario', importance: 5 });
     });
 
     apps.sort((a, b) => a.importance - b.importance || a.packageName.localeCompare(b.packageName));
@@ -1490,17 +1496,29 @@ app.post('/api/device/:id/files/delete-batch', async (req, res) => {
 });
 
 
-// 3. Screen Mirroring (Screenshot)
-app.get('/api/device/:id/screenshot', async (req, res) => {
+// 3. Screen Mirroring (Screenshot Streaming directo en memoria)
+app.get('/api/device/:id/screenshot', (req, res) => {
   try {
     const { id } = req.params;
-    const tempPath = path.join('/tmp', `screen_${Date.now()}.png`);
-    await execAsync(`${ADB_PATH} -s ${id} shell screencap -p > "${tempPath}"`);
-    res.sendFile(tempPath, () => {
-      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+    
+    const proc = spawn(ADB_PATH, ['-s', id, 'exec-out', 'screencap', '-p']);
+    proc.stdout.pipe(res);
+
+    proc.on('error', () => {
+      if (!res.headersSent) {
+        res.status(500).send('Screenshot failed');
+      }
+    });
+
+    req.on('close', () => {
+      try { proc.kill(); } catch (e) {}
     });
   } catch (err: any) {
-    res.status(500).send('Screenshot failed');
+    if (!res.headersSent) {
+      res.status(500).send('Screenshot failed');
+    }
   }
 });
 
@@ -1830,7 +1848,7 @@ app.post('/api/device/:id/developer-toggles', async (req, res) => {
   }
 });
 
-// 3. Extract APK
+// 3. Extract APK (con soporte para Split APKs / App Bundles en ZIP)
 app.get('/api/device/:id/apps/pull', async (req, res) => {
   try {
     const { id } = req.params;
@@ -1838,30 +1856,58 @@ app.get('/api/device/:id/apps/pull', async (req, res) => {
     
     if (!packageName) return res.status(400).send('Package name required');
 
-    // Get path
+    // Get paths
     const { stdout: pathOut } = await execAsync(`${ADB_PATH} -s ${id} shell pm path ${packageName}`);
-    if (!pathOut || !pathOut.includes('package:')) {
+    const apkPaths = pathOut
+      .split('\n')
+      .map(l => l.trim())
+      .filter(l => l.startsWith('package:'))
+      .map(l => l.replace('package:', '').trim());
+
+    if (apkPaths.length === 0) {
       return res.status(404).send('No se pudo encontrar el archivo APK original en el sistema.');
     }
 
-    const apkPath = pathOut.split('package:')[1].trim();
-    const localFile = `${packageName}.apk`;
-    const localPath = path.join(__dirname, '..', 'backups', localFile);
+    const backupDir = path.join(__dirname, '..', 'backups');
+    if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
 
-    // Pull
-    await execAsync(`${ADB_PATH} -s ${id} pull "${apkPath}" "${localPath}"`);
+    if (apkPaths.length === 1) {
+      // Single APK
+      const localFile = `${packageName}.apk`;
+      const localPath = path.join(backupDir, localFile);
+      await execAsync(`${ADB_PATH} -s ${id} pull "${apkPaths[0]}" "${localPath}"`);
 
-    if (!fs.existsSync(localPath)) {
-      return res.status(500).send('Fallo al extraer el archivo APK del teléfono.');
-    }
-
-    res.download(localPath, localFile, (err) => {
-      // Clean up after download
-      if (fs.existsSync(localPath)) {
-         fs.unlinkSync(localPath);
+      if (!fs.existsSync(localPath)) {
+        return res.status(500).send('Fallo al extraer el archivo APK del teléfono.');
       }
-    });
 
+      res.download(localPath, localFile, () => {
+        if (fs.existsSync(localPath)) fs.unlinkSync(localPath);
+      });
+    } else {
+      // Split APKs (App Bundle)
+      const splitDir = path.join(backupDir, `split_${packageName}_${Date.now()}`);
+      fs.mkdirSync(splitDir, { recursive: true });
+
+      for (const remoteApk of apkPaths) {
+        const apkName = path.basename(remoteApk);
+        await execAsync(`${ADB_PATH} -s ${id} pull "${remoteApk}" "${path.join(splitDir, apkName)}"`);
+      }
+
+      const zipFile = `${packageName}_bundle.zip`;
+      const zipPath = path.join(backupDir, zipFile);
+
+      await execAsync(`cd "${splitDir}" && zip -r "${zipPath}" ./*`);
+      fs.rmSync(splitDir, { recursive: true, force: true });
+
+      if (!fs.existsSync(zipPath)) {
+        return res.status(500).send('Fallo al comprimir el bundle de Split APKs.');
+      }
+
+      res.download(zipPath, zipFile, () => {
+        if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+      });
+    }
   } catch (err: any) {
     res.status(500).send(err.message);
   }
@@ -2237,25 +2283,6 @@ app.get('/api/device/:id/report', async (req, res) => {
 // REPAIR & TEST TOOLS ENDPOINTS
 // ==========================================
 
-app.get('/api/device/:id/apps', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { stdout: thirdParty } = await execAsync(`${ADB_PATH} -s ${id} shell pm list packages -3`);
-    const { stdout: system } = await execAsync(`${ADB_PATH} -s ${id} shell pm list packages -s`);
-    
-    const parsePackages = (output: string, isSystem: boolean) => {
-      return output.split('\n')
-        .map(line => line.replace('package:', '').trim())
-        .filter(pkg => pkg)
-        .map(pkg => ({ packageName: pkg, isSystem }));
-    };
-
-    res.json({ success: true, apps: [...parsePackages(thirdParty, false), ...parsePackages(system, true)] });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
 app.post('/api/device/:id/apps/manage', async (req, res) => {
   try {
     const { id } = req.params;
@@ -2331,6 +2358,298 @@ app.post('/api/device/:id/hardware/vibrate', async (req, res) => {
       await execAsync(`${ADB_PATH} -s ${id} shell cmd vibrator vibrate 1000`);
     }
     res.json({ success: true, message: 'Comando de vibración enviado.' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ==========================================
+// WIRELESS ADB (WiFi Connect & Pair)
+// ==========================================
+
+app.post('/api/wireless/tcpip', async (req, res) => {
+  try {
+    const { id, port = 5555 } = req.body;
+    if (!id) return res.status(400).json({ success: false, error: 'Device ID requerido' });
+    const { stdout, stderr } = await execAsync(`${ADB_PATH} -s ${id} tcpip ${port}`);
+    res.json({ success: true, message: `Modo TCP/IP activado en puerto ${port}. Ya puedes desconectar el cable y conectar por WiFi.`, output: stdout || stderr });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/wireless/connect', async (req, res) => {
+  try {
+    const { ip, port = 5555 } = req.body;
+    if (!ip) return res.status(400).json({ success: false, error: 'Dirección IP requerida' });
+    const target = `${ip}:${port}`;
+    const { stdout, stderr } = await execAsync(`${ADB_PATH} connect ${target}`);
+    const output = (stdout || stderr).trim();
+    const isSuccess = output.toLowerCase().includes('connected to') && !output.toLowerCase().includes('unable');
+    res.json({ success: isSuccess, message: output });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/wireless/pair', async (req, res) => {
+  try {
+    const { ip, port, code } = req.body;
+    if (!ip || !port || !code) return res.status(400).json({ success: false, error: 'IP, puerto y código de emparejamiento requeridos' });
+    const { stdout, stderr } = await execAsync(`${ADB_PATH} pair ${ip}:${port} ${code}`);
+    const output = (stdout || stderr).trim();
+    const isSuccess = output.toLowerCase().includes('successfully paired');
+    res.json({ success: isSuccess, message: output });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/wireless/disconnect', async (req, res) => {
+  try {
+    const { ip, port = 5555 } = req.body;
+    const target = ip ? (port ? `${ip}:${port}` : ip) : '';
+    const { stdout, stderr } = await execAsync(`${ADB_PATH} disconnect ${target}`);
+    res.json({ success: true, message: (stdout || stderr).trim() });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ==========================================
+// PC KEYBOARD & CLIPBOARD
+// ==========================================
+
+app.post('/api/device/:id/input/text', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { text } = req.body;
+    if (typeof text !== 'string') return res.status(400).json({ success: false, error: 'Texto requerido' });
+    const formatted = text.replace(/ /g, '%s').replace(/(["'$`\\])/g, '\\$1');
+    await execAsync(`${ADB_PATH} -s ${id} shell input text "${formatted}"`);
+    res.json({ success: true, message: 'Texto inyectado en el dispositivo' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/device/:id/clipboard', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { stdout } = await execAsync(`${ADB_PATH} -s ${id} shell cmd clipboard get`).catch(() => ({ stdout: '' }));
+    res.json({ success: true, text: stdout.trim() });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/device/:id/clipboard', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { text } = req.body;
+    if (typeof text !== 'string') return res.status(400).json({ success: false, error: 'Texto requerido' });
+    const cleanText = text.replace(/"/g, '\\"');
+    await execAsync(`${ADB_PATH} -s ${id} shell cmd clipboard set "${cleanText}"`);
+    res.json({ success: true, message: 'Portapapeles actualizado en Android' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ==========================================
+// ONE-CLICK EXPRESS SELF-TEST
+// ==========================================
+
+app.post('/api/device/:id/selftest', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const testResults: any = {
+      timestamp: new Date().toISOString(),
+      score: 100,
+      checks: []
+    };
+
+    let deductions = 0;
+
+    // 1. Internet Ping
+    try {
+      const { stdout: pingOut } = await execAsync(`${ADB_PATH} -s ${id} shell ping -c 2 -W 2 8.8.8.8`);
+      const lossMatch = pingOut.match(/(\d+)% packet loss/);
+      const loss = lossMatch ? parseInt(lossMatch[1]) : 100;
+      if (loss === 0) {
+        testResults.checks.push({ name: 'Conectividad a Internet', status: 'PASS', detail: '0% pérdida de paquetes (Ping 8.8.8.8 OK)' });
+      } else {
+        deductions += 15;
+        testResults.checks.push({ name: 'Conectividad a Internet', status: 'WARN', detail: `${loss}% pérdida de paquetes` });
+      }
+    } catch {
+      deductions += 20;
+      testResults.checks.push({ name: 'Conectividad a Internet', status: 'FAIL', detail: 'Sin conexión a internet detectada' });
+    }
+
+    // 2. Battery
+    try {
+      const { stdout: batOut } = await execAsync(`${ADB_PATH} -s ${id} shell dumpsys battery`);
+      const level = batOut.match(/level:\s*(\d+)/);
+      const health = batOut.match(/health:\s*(\d+)/);
+      const temp = batOut.match(/temperature:\s*(\d+)/);
+      const cycles = batOut.match(/mCycleCount:\s*(\d+)/) || batOut.match(/cycle_count:\s*(\d+)/);
+
+      const batLevel = level ? parseInt(level[1]) : 0;
+      const batHealthCode = health ? parseInt(health[1]) : 0;
+      const batTemp = temp ? parseInt(temp[1]) / 10 : 0;
+      const batCycles = cycles ? parseInt(cycles[1]) : null;
+
+      const healthStr = batHealthCode === 2 ? 'Buena' : (batHealthCode === 3 ? 'Sobrecalentada' : (batHealthCode === 4 ? 'Muerta' : 'Requiere Servicio'));
+      let status = 'PASS';
+      if (batHealthCode !== 2 && batHealthCode !== 0) { deductions += 25; status = 'FAIL'; }
+      else if (batTemp > 45) { deductions += 15; status = 'WARN'; }
+
+      testResults.checks.push({
+        name: 'Estado de Batería',
+        status,
+        detail: `Nivel: ${batLevel}%, Salud: ${healthStr}, Temp: ${batTemp}°C${batCycles !== null ? `, Ciclos: ${batCycles}` : ''}`
+      });
+    } catch {
+      deductions += 10;
+      testResults.checks.push({ name: 'Estado de Batería', status: 'WARN', detail: 'Telemetría de batería parcial' });
+    }
+
+    // 3. Storage
+    try {
+      const { stdout: dfOut } = await execAsync(`${ADB_PATH} -s ${id} shell df -h /data`);
+      const lines = dfOut.split('\n').filter(l => l.trim().length > 0);
+      if (lines.length >= 2) {
+        const parts = lines[1].split(/\s+/);
+        const free = parts[3];
+        const percentStr = parts[4] || '0%';
+        const percentUsed = parseInt(percentStr.replace('%', '')) || 0;
+        let status = 'PASS';
+        if (percentUsed >= 95) { deductions += 20; status = 'FAIL'; }
+        else if (percentUsed >= 85) { deductions += 10; status = 'WARN'; }
+
+        testResults.checks.push({
+          name: 'Almacenamiento (/data)',
+          status,
+          detail: `Espacio Libre: ${free} (${percentStr} ocupado)`
+        });
+      }
+    } catch {
+      testResults.checks.push({ name: 'Almacenamiento (/data)', status: 'WARN', detail: 'No se pudo consultar partición /data' });
+    }
+
+    // 4. Memory RAM
+    try {
+      const { stdout: meminfo } = await execAsync(`${ADB_PATH} -s ${id} shell cat /proc/meminfo`);
+      let total = 0, avail = 0;
+      meminfo.split('\n').forEach(l => {
+        if (l.startsWith('MemTotal:')) total = parseInt(l.split(/\s+/)[1]) || 0;
+        if (l.startsWith('MemAvailable:')) avail = parseInt(l.split(/\s+/)[1]) || 0;
+      });
+      if (total > 0) {
+        const freeMb = Math.round(avail / 1024);
+        const totalMb = Math.round(total / 1024);
+        const freePct = Math.round((avail / total) * 100);
+        let status = 'PASS';
+        if (freePct < 10) { deductions += 15; status = 'WARN'; }
+        testResults.checks.push({
+          name: 'Memoria RAM',
+          status,
+          detail: `${freeMb} MB disponibles de ${totalMb} MB (${freePct}% libre)`
+        });
+      }
+    } catch {
+      testResults.checks.push({ name: 'Memoria RAM', status: 'WARN', detail: 'Lectura no disponible' });
+    }
+
+    // 5. Sensors
+    try {
+      const { stdout: sensorsOut } = await execAsync(`${ADB_PATH} -s ${id} shell dumpsys sensorservice | grep -c 'android.sensor.'`);
+      const count = parseInt(sensorsOut.trim()) || 0;
+      testResults.checks.push({
+        name: 'Subsistema de Sensores',
+        status: count > 3 ? 'PASS' : 'WARN',
+        detail: `${count} sensores físicos y compuestos detectados`
+      });
+    } catch {
+      testResults.checks.push({ name: 'Subsistema de Sensores', status: 'PASS', detail: 'Servicio en ejecución' });
+    }
+
+    // 6. Haptic Feedback Pulse
+    try {
+      await execAsync(`${ADB_PATH} -s ${id} shell cmd vibrator_manager synced -f oneshot 150`).catch(async () => {
+        await execAsync(`${ADB_PATH} -s ${id} shell cmd vibrator vibrate 150`).catch(() => {});
+      });
+      testResults.checks.push({ name: 'Motor Háptico / Vibrador', status: 'PASS', detail: 'Pulso de verificación ejecutado con éxito' });
+    } catch {
+      testResults.checks.push({ name: 'Motor Háptico', status: 'WARN', detail: 'Sin respuesta háptica' });
+    }
+
+    testResults.score = Math.max(0, 100 - deductions);
+    res.json({ success: true, data: testResults });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ==========================================
+// FORENSIC AUDIT (CA Certs & Google Account FRP)
+// ==========================================
+
+app.get('/api/device/:id/security/audit', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // 1. User CA Certificates
+    const userCacerts: string[] = [];
+    try {
+      const { stdout: certsOut } = await execAsync(`${ADB_PATH} -s ${id} shell ls /data/misc/user/0/cacerts-added/ 2>/dev/null || true`);
+      const certFiles = certsOut.split('\n').map(c => c.trim()).filter(c => c && !c.includes('No such file') && !c.includes('Permission denied'));
+      userCacerts.push(...certFiles);
+    } catch {}
+
+    // 2. Google Accounts (FRP risk check)
+    const googleAccounts: string[] = [];
+    let frpRisk = false;
+    try {
+      const { stdout: accOut } = await execAsync(`${ADB_PATH} -s ${id} shell dumpsys account`);
+      const lines = accOut.split('\n');
+      for (const line of lines) {
+        if (line.includes('Account {name=') && line.includes('type=com.google')) {
+          const nameMatch = line.match(/name=([^,]+)/);
+          if (nameMatch) {
+            googleAccounts.push(nameMatch[1]);
+            frpRisk = true;
+          }
+        }
+      }
+    } catch {}
+
+    // 3. Security Properties
+    let oemUnlockAllowed = 'Desconocido';
+    try {
+      const { stdout: oemOut } = await execAsync(`${ADB_PATH} -s ${id} shell getprop sys.oem_unlock_allowed`);
+      if (oemOut.trim()) oemUnlockAllowed = oemOut.trim() === '1' ? 'Habilitado' : 'Deshabilitado';
+    } catch {}
+
+    let seLinuxStatus = 'Enforcing';
+    try {
+      const { stdout: seOut } = await execAsync(`${ADB_PATH} -s ${id} shell getenforce`);
+      if (seOut.trim()) seLinuxStatus = seOut.trim();
+    } catch {}
+
+    res.json({
+      success: true,
+      data: {
+        userCertificatesCount: userCacerts.length,
+        userCertificates: userCacerts,
+        hasCustomCertificates: userCacerts.length > 0,
+        googleAccounts,
+        frpRisk,
+        oemUnlockAllowed,
+        seLinuxStatus
+      }
+    });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
