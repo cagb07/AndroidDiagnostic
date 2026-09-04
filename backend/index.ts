@@ -2373,13 +2373,55 @@ app.get('/api/device/:id/report', async (req, res) => {
         instructions,
         links
       };
-    } catch(e) {}
+    } catch (e) {}
 
-    return res.json({ success: true, data: reportData });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
+    // 7. Security & FRP Audit for Report
+      try {
+        const googleAccounts: string[] = [];
+        const samsungAccounts: string[] = [];
+        const { stdout: accOut } = await execAsync(`${ADB_PATH} -s ${id} shell dumpsys account`);
+        const lines = accOut.split('\n');
+        for (const line of lines) {
+          const match = line.match(/Account\s*\{\s*name=([^,]+),\s*type=([^}\s]+)/);
+          if (match) {
+            const name = match[1].trim();
+            const type = match[2].trim();
+            if (type === 'com.google') {
+              if (!googleAccounts.includes(name)) googleAccounts.push(name);
+            } else if (type === 'com.osp.app.signin' || type.includes('samsung.android.mobileservice')) {
+              if (!samsungAccounts.includes(name)) samsungAccounts.push(name);
+            }
+          }
+        }
+
+        const userCacerts: string[] = [];
+        try {
+          const { stdout: certsOut } = await execAsync(`${ADB_PATH} -s ${id} shell ls /data/misc/user/0/cacerts-added/ 2>/dev/null || true`);
+          const certFiles = certsOut.split('\n').map(c => c.trim()).filter(c => c && !c.includes('No such file') && !c.includes('Permission denied'));
+          userCacerts.push(...certFiles);
+        } catch {}
+
+        const frpRisk = googleAccounts.length > 0 || samsungAccounts.length > 0;
+        reportData.securityAudit = {
+          frpRisk,
+          googleAccounts,
+          samsungAccounts,
+          accounts: {
+            google: googleAccounts,
+            samsung: samsungAccounts
+          },
+          userCertificates: userCacerts,
+          userCertificatesCount: userCacerts.length,
+          hasCustomCertificates: userCacerts.length > 0,
+          hasUserCAs: userCacerts.length > 0
+        };
+      } catch (e) {}
+
+      return res.json({ success: true, data: reportData });
+    } catch (err: any) {
+      handleAdbError(res, err, 'Error al generar reporte técnico');
+    }
+  });
 
 // ==========================================
 // REPAIR & TEST TOOLS ENDPOINTS
@@ -2710,22 +2752,27 @@ app.get('/api/device/:id/security/audit', async (req, res) => {
       userCacerts.push(...certFiles);
     } catch {}
 
-    // 2. Google Accounts (FRP risk check)
+    // 2. Google and Samsung Accounts (FRP & Reactivation Lock check)
     const googleAccounts: string[] = [];
-    let frpRisk = false;
+    const samsungAccounts: string[] = [];
     try {
       const { stdout: accOut } = await execAsync(`${ADB_PATH} -s ${id} shell dumpsys account`);
       const lines = accOut.split('\n');
       for (const line of lines) {
-        if (line.includes('Account {name=') && line.includes('type=com.google')) {
-          const nameMatch = line.match(/name=([^,]+)/);
-          if (nameMatch) {
-            googleAccounts.push(nameMatch[1]);
-            frpRisk = true;
+        const match = line.match(/Account\s*\{\s*name=([^,]+),\s*type=([^}\s]+)/);
+        if (match) {
+          const name = match[1].trim();
+          const type = match[2].trim();
+          if (type === 'com.google') {
+            if (!googleAccounts.includes(name)) googleAccounts.push(name);
+          } else if (type === 'com.osp.app.signin' || type.includes('samsung.android.mobileservice')) {
+            if (!samsungAccounts.includes(name)) samsungAccounts.push(name);
           }
         }
       }
     } catch {}
+
+    const frpRisk = googleAccounts.length > 0 || samsungAccounts.length > 0;
 
     // 3. Security Properties
     let oemUnlockAllowed = 'Desconocido';
@@ -2745,15 +2792,22 @@ app.get('/api/device/:id/security/audit', async (req, res) => {
       data: {
         userCertificatesCount: userCacerts.length,
         userCertificates: userCacerts,
+        userCAs: userCacerts,
         hasCustomCertificates: userCacerts.length > 0,
+        hasUserCAs: userCacerts.length > 0,
         googleAccounts,
+        samsungAccounts,
+        accounts: {
+          google: googleAccounts,
+          samsung: samsungAccounts
+        },
         frpRisk,
         oemUnlockAllowed,
         seLinuxStatus
       }
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    handleAdbError(res, err, 'Error al ejecutar auditoría de seguridad');
   }
 });
 

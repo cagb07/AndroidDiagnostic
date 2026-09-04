@@ -366,11 +366,19 @@ function App() {
     }
   };
 
-  const triggerTechnicalReportPrint = () => {
+  const triggerTechnicalReportPrint = async () => {
+    if (selectedDevice) {
+      try {
+        const res = await axios.get(`${API_BASE}/device/${selectedDevice}/security/audit`);
+        if (res.data.success) {
+          setSecurityAudit(res.data.data);
+        }
+      } catch (e) {}
+    }
     setShowPrintReport(true);
     setTimeout(() => {
       window.print();
-    }, 300);
+    }, 400);
   };
 
   // Manejadores Samsung Odin (OdinMac Engine)
@@ -1114,6 +1122,7 @@ function App() {
       fetchApps(selectedDevice);
       fetchSensors(selectedDevice);
       fetchAdvancedDiagnostics(selectedDevice);
+      fetchSecurityAudit();
     }
   }, [selectedDevice]);
 
@@ -5492,9 +5501,14 @@ function App() {
                   <div className="grid grid-cols-2 gap-4 text-xs font-mono">
                     <div className="p-3 border border-slate-200 rounded">
                       <div className="font-bold text-slate-900 mb-1 font-sans">Cuentas Google / Factory Reset Protection:</div>
-                      {securityAudit?.frpRisk ? (
+                      {securityAudit?.frpRisk || (securityAudit?.googleAccounts && securityAudit.googleAccounts.length > 0) ? (
                         <div className="text-red-700 font-bold">
-                          ⚠️ ALERTA FRP: {securityAudit.accounts.google.length} Cuenta(s) Google activas vinculadas. Un formateo exigirá credenciales del propietario.
+                          ⚠️ ALERTA FRP: {securityAudit.googleAccounts?.length || securityAudit.accounts?.google?.length || 1} Cuenta(s) Google activas vinculadas
+                          {securityAudit.samsungAccounts?.length ? ` y ${securityAudit.samsungAccounts.length} Cuenta(s) Samsung` : ''}.
+                          Un formateo exigirá credenciales del propietario.
+                          <div className="text-[10px] text-slate-700 font-mono font-normal mt-1 break-all">
+                            {[...(securityAudit.googleAccounts || []), ...(securityAudit.samsungAccounts || [])].join(', ')}
+                          </div>
                         </div>
                       ) : (
                         <div className="text-emerald-700 font-bold">
@@ -5504,9 +5518,14 @@ function App() {
                     </div>
                     <div className="p-3 border border-slate-200 rounded">
                       <div className="font-bold text-slate-900 mb-1 font-sans">Certificados CA de Usuario (Espionaje / Proxy):</div>
-                      {securityAudit?.hasUserCAs ? (
+                      {securityAudit?.hasCustomCertificates || securityAudit?.hasUserCAs || (securityAudit?.userCertificates && securityAudit.userCertificates.length > 0) ? (
                         <div className="text-red-700 font-bold">
-                          ⚠️ ALERTA: {securityAudit.userCAs.length} certificado(s) raíz instalados manualmente (Riesgo de interceptación de tráfico TLS).
+                          ⚠️ ALERTA: {securityAudit.userCertificatesCount || securityAudit.userCertificates?.length || securityAudit.userCAs?.length || 0} certificado(s) raíz instalados manualmente (Riesgo de interceptación de tráfico TLS).
+                          {securityAudit.userCertificates?.length > 0 && (
+                            <div className="text-[10px] text-slate-700 font-mono font-normal mt-1 break-all">
+                              {securityAudit.userCertificates.join(', ')}
+                            </div>
+                          )}
                         </div>
                       ) : (
                         <div className="text-emerald-700 font-bold">
