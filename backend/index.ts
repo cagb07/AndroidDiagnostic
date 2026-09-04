@@ -2723,6 +2723,31 @@ app.post('/api/odin/reboot-download', async (req, res) => {
   }
 });
 
+// Helper to inspect Heimdall failure cause and correlate with ADB status
+async function getHeimdallDiagnosticError(err: any): Promise<{ notInDownloadMode: boolean; error: string; output: string }> {
+  const output = ((err.stdout || '') + '\n' + (err.stderr || '') + '\n' + (err.message || '')).trim();
+  const notInDownloadMode = output.toLowerCase().includes('failed to detect compatible download-mode device') ||
+                            output.toLowerCase().includes('failed to detect');
+  
+  let adbDeviceName = '';
+  try {
+    const devices = await client.listDevices();
+    if (devices && devices.length > 0) {
+      adbDeviceName = devices[0].id;
+    }
+  } catch {}
+
+  let error = 'Error en motor Heimdall: ' + (err.message || output);
+  if (notInDownloadMode) {
+    if (adbDeviceName) {
+      error = `Dispositivo detectado en modo Android normal (ADB: ${adbDeviceName}). Para leer o descargar la tabla PIT o flashear, el equipo debe estar en Modo Descarga (Odin Mode). Pulsa 'Reiniciar a Download' para reiniciarlo en modo descarga.`;
+    } else {
+      error = 'No se detectó ningún dispositivo Samsung en Modo Descarga (Odin Mode). Conecta tu Samsung por cable USB en Modo Descarga.';
+    }
+  }
+  return { notInDownloadMode, error, output };
+}
+
 // Download PIT file from device
 app.post('/api/odin/download-pit', async (req, res) => {
   const pitFile = path.join(uploadDir, `device_${Date.now()}.pit`);
@@ -2735,7 +2760,16 @@ app.post('/api/odin/download-pit', async (req, res) => {
       output: (stdout + '\n' + stderr).trim()
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message, output: (err.stdout || '') + (err.stderr || '') });
+    if (fs.existsSync(pitFile)) {
+      try { fs.unlinkSync(pitFile); } catch {}
+    }
+    const diag = await getHeimdallDiagnosticError(err);
+    res.status(diag.notInDownloadMode ? 409 : 400).json({
+      success: false,
+      notInDownloadMode: diag.notInDownloadMode,
+      error: diag.error,
+      output: diag.output
+    });
   }
 });
 
@@ -2748,10 +2782,12 @@ app.get('/api/odin/print-pit', async (req, res) => {
       output: (stdout || stderr).trim()
     });
   } catch (err: any) {
-    res.status(500).json({
+    const diag = await getHeimdallDiagnosticError(err);
+    res.status(diag.notInDownloadMode ? 409 : 400).json({
       success: false,
-      error: 'No se pudo leer el PIT del dispositivo. Asegúrate de que el teléfono esté en Modo Descarga.',
-      output: (err.stdout || '') + (err.stderr || '')
+      notInDownloadMode: diag.notInDownloadMode,
+      error: diag.error,
+      output: diag.output
     });
   }
 });
