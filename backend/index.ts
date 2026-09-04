@@ -241,6 +241,31 @@ app.get('/api/devices/events', async (req, res) => {
   });
 });
 
+function handleAdbError(res: express.Response, err: any, defaultMsg: string = 'Error al ejecutar comando ADB') {
+  const msg = err?.message || String(err);
+  if (msg.includes('device not found') || msg.includes('device offline') || msg.includes('no devices/emulators found') || msg.includes('not found')) {
+    return res.status(503).json({
+      success: false,
+      deviceOffline: true,
+      error: 'El dispositivo no está disponible o se está reiniciando. Espera a que termine de encender.'
+    });
+  }
+  if (msg.includes('device unauthorized')) {
+    return res.status(401).json({
+      success: false,
+      unauthorized: true,
+      error: 'Dispositivo no autorizado. Desbloquea la pantalla y acepta la huella de depuración USB.'
+    });
+  }
+  if (msg.includes('Permission denied') || msg.includes('su: not found') || msg.includes('inaccessible')) {
+    return res.status(403).json({
+      success: false,
+      error: 'Permiso denegado. Esta acción requiere que el dispositivo tenga acceso Root o esté iniciado en Recovery (TWRP).'
+    });
+  }
+  return res.status(400).json({ success: false, error: `${defaultMsg}: ${msg}` });
+}
+
 app.get('/api/device/:id/info', async (req, res) => {
   try {
     const { id } = req.params;
@@ -333,7 +358,7 @@ app.get('/api/device/:id/info', async (req, res) => {
       }
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    handleAdbError(res, err, 'Error al obtener información del dispositivo');
   }
 });
 
@@ -371,7 +396,7 @@ app.get('/api/device/:id/battery', async (req, res) => {
       data: batteryInfo
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    handleAdbError(res, err, 'Error al obtener estado de batería');
   }
 });
 
@@ -546,7 +571,7 @@ app.get('/api/device/:id/sensors', async (req, res) => {
     
     res.json({ success: true, sensors });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    handleAdbError(res, err, 'Error al obtener sensores');
   }
 });
 
@@ -583,7 +608,7 @@ app.get('/api/device/:id/apps', async (req, res) => {
 
     res.json({ success: true, apps });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    handleAdbError(res, err, 'Error al listar aplicaciones');
   }
 });
 
@@ -1299,7 +1324,7 @@ app.post('/api/device/:id/bypass/twrp', async (req, res) => {
     const { stdout, stderr } = await execAsync(`${ADB_PATH} -s ${id} shell "su -c '${cmd}' || ${cmd}"`);
     res.json({ success: true, message: 'Bases de datos de seguridad eliminadas correctamente. Por favor reinicia el dispositivo.' });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: 'Fallo al eliminar archivos. ¿Seguro que tienes permisos Root o estás en TWRP con /data montado?\n' + err.message });
+    handleAdbError(res, err, 'Fallo al eliminar archivos. Se requieren permisos Root o estar en TWRP con /data montado');
   }
 });
 
@@ -2451,7 +2476,7 @@ app.post('/api/wireless/tcpip', async (req, res) => {
     const { stdout, stderr } = await execAsync(`${ADB_PATH} -s ${id} tcpip ${port}`);
     res.json({ success: true, message: `Modo TCP/IP activado en puerto ${port}. Ya puedes desconectar el cable y conectar por WiFi.`, output: stdout || stderr });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    handleAdbError(res, err, 'Error al activar modo TCP/IP');
   }
 });
 
