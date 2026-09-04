@@ -17,9 +17,25 @@ const PORT = 3001;
 app.use(cors());
 app.use(express.json());
 
-// We are using absolute path for adb and fastboot to avoid PATH issues in Node.js on Mac.
-const ADB_PATH = '/Users/humberto54/Library/Android/sdk/platform-tools/adb';
-const FASTBOOT_PATH = '/Users/humberto54/Library/Android/sdk/platform-tools/fastboot';
+// Auto-detect path for adb and fastboot
+function resolveBinaryPath(name: string): string {
+  const candidates = [
+    `/usr/local/bin/${name}`,
+    `/opt/homebrew/bin/${name}`,
+    path.join(process.env.HOME || '', 'Library/Android/sdk/platform-tools', name),
+    `/Users/humberto54/Library/Android/sdk/platform-tools/${name}`
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return name;
+}
+
+const ADB_PATH = resolveBinaryPath('adb');
+const FASTBOOT_PATH = resolveBinaryPath('fastboot');
+console.log(`[ADB] Using: ${ADB_PATH}, [FASTBOOT] Using: ${FASTBOOT_PATH}`);
 
 // Setup Multer for temporary file uploads
 const uploadDir = path.join(__dirname, '..', 'tmp');
