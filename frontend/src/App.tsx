@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
-import { Smartphone, Battery, Info, Activity, RefreshCw, Power, Zap, PlaySquare, LayoutGrid, Trash2, TerminalSquare, Play, Square, HardDriveDownload, ShieldAlert, Unlock, UploadCloud, AlertCircle, Volume2, Sun, Moon, PowerOff, ShieldQuestion, Camera, MonitorPlay, Lock, Wrench, Cpu, Database, Wifi, Thermometer, MemoryStick, ServerCrash, Box, Upload, Terminal, FolderOpen, EyeOff, Eye, X, Maximize, LayoutDashboard, Globe, Radar, Bug, Flame, ChevronLeft, Circle, Film, FileText, Printer, Copy, Keyboard, Clipboard, CheckCircle2, AlertTriangle, XCircle, ShieldCheck } from 'lucide-react';
+import { Smartphone, Battery, Info, Activity, RefreshCw, Power, Zap, PlaySquare, LayoutGrid, Trash2, TerminalSquare, Play, Square, HardDriveDownload, ShieldAlert, Unlock, UploadCloud, AlertCircle, Volume2, Sun, Moon, PowerOff, ShieldQuestion, Camera, MonitorPlay, Lock, Wrench, Cpu, Database, Wifi, Thermometer, MemoryStick, ServerCrash, Box, Upload, Terminal, FolderOpen, EyeOff, Eye, X, Maximize, LayoutDashboard, Globe, Radar, Bug, Flame, ChevronLeft, Circle, Film, FileText, Printer, Copy, Keyboard, Clipboard, CheckCircle2, AlertTriangle, XCircle, ShieldCheck, Radio, Signal, ExternalLink, Search, Hash } from 'lucide-react';
 
 const API_BASE = 'http://localhost:3001/api';
 
@@ -170,6 +170,17 @@ function App() {
 
   const [securityAudit, setSecurityAudit] = useState<any | null>(null);
   const [isLoadingSecurityAudit, setIsLoadingSecurityAudit] = useState(false);
+
+  // IMEI & Telephony Diagnostics State
+  const [imeiData, setImeiData] = useState<any | null>(null);
+  const [isLoadingImei, setIsLoadingImei] = useState(false);
+  const [telephonyDiag, setTelephonyDiag] = useState<any | null>(null);
+  const [isLoadingTelephony, setIsLoadingTelephony] = useState(false);
+  const [dialerTriggerMsg, setDialerTriggerMsg] = useState<string | null>(null);
+  const [copiedImeiSlot, setCopiedImeiSlot] = useState<number | null>(null);
+  const [manualImeiInput, setManualImeiInput] = useState('');
+  const [manualImeiResult, setManualImeiResult] = useState<any | null>(null);
+  const [isCheckingManualImei, setIsCheckingManualImei] = useState(false);
 
   const [showPrintReport, setShowPrintReport] = useState(false);
 
@@ -366,13 +377,74 @@ function App() {
     }
   };
 
+  const fetchImeiAndTelephony = async () => {
+    if (!selectedDevice) return;
+    setIsLoadingImei(true);
+    setIsLoadingTelephony(true);
+    try {
+      const [imeiRes, telRes] = await Promise.all([
+        axios.get(`${API_BASE}/device/${selectedDevice}/imei/extract`).catch(() => null),
+        axios.get(`${API_BASE}/device/${selectedDevice}/telephony/diagnostics`).catch(() => null)
+      ]);
+      if (imeiRes?.data?.success) {
+        setImeiData(imeiRes.data.data);
+      }
+      if (telRes?.data?.success) {
+        setTelephonyDiag(telRes.data.data);
+      }
+    } catch (e) {
+      console.error('Error fetching IMEI and telephony diagnostics:', e);
+    } finally {
+      setIsLoadingImei(false);
+      setIsLoadingTelephony(false);
+    }
+  };
+
+  const triggerImeiDialer = async () => {
+    if (!selectedDevice) return;
+    try {
+      const res = await axios.post(`${API_BASE}/device/${selectedDevice}/imei/trigger-dialer`);
+      if (res.data.success) {
+        setDialerTriggerMsg('✓ Marcador *#06# ejecutado en pantalla.');
+        setTimeout(() => setDialerTriggerMsg(null), 4000);
+      }
+    } catch (e: any) {
+      alert('Error al abrir marcador en dispositivo: ' + (e.response?.data?.error || e.message));
+    }
+  };
+
+  const handleCopyImei = (imei: string, slot: number) => {
+    navigator.clipboard.writeText(imei);
+    setCopiedImeiSlot(slot);
+    setTimeout(() => setCopiedImeiSlot(null), 2500);
+  };
+
+  const validateManualImei = async () => {
+    if (!manualImeiInput.trim()) return;
+    setIsCheckingManualImei(true);
+    try {
+      const res = await axios.post(`${API_BASE}/imei/validate`, { imei: manualImeiInput.trim() });
+      if (res.data.success) {
+        setManualImeiResult(res.data.data);
+      }
+    } catch (e: any) {
+      alert('Error al validar IMEI: ' + (e.response?.data?.error || e.message));
+    } finally {
+      setIsCheckingManualImei(false);
+    }
+  };
+
   const triggerTechnicalReportPrint = async () => {
     if (selectedDevice) {
       try {
-        const res = await axios.get(`${API_BASE}/device/${selectedDevice}/security/audit`);
-        if (res.data.success) {
-          setSecurityAudit(res.data.data);
-        }
+        const [secRes, imeiRes, telRes] = await Promise.all([
+          axios.get(`${API_BASE}/device/${selectedDevice}/security/audit`).catch(() => null),
+          axios.get(`${API_BASE}/device/${selectedDevice}/imei/extract`).catch(() => null),
+          axios.get(`${API_BASE}/device/${selectedDevice}/telephony/diagnostics`).catch(() => null)
+        ]);
+        if (secRes?.data?.success) setSecurityAudit(secRes.data.data);
+        if (imeiRes?.data?.success) setImeiData(imeiRes.data.data);
+        if (telRes?.data?.success) setTelephonyDiag(telRes.data.data);
       } catch (e) {}
     }
     setShowPrintReport(true);
@@ -1097,7 +1169,10 @@ function App() {
     if (activeTab === 'privacy') fetchPermissions();
     if (activeTab === 'screen' && !isLiveScreen) fetchScreenshot();
     if (activeTab === 'deepscanner') fetchDeepInfo();
-    if (activeTab === 'security') fetchSecurityAudit();
+    if (activeTab === 'security') {
+      fetchSecurityAudit();
+      fetchImeiAndTelephony();
+    }
     if (activeTab === 'odin') {
       fetchOdinStatus();
       handleOdinDetect();
@@ -1123,6 +1198,7 @@ function App() {
       fetchSensors(selectedDevice);
       fetchAdvancedDiagnostics(selectedDevice);
       fetchSecurityAudit();
+      fetchImeiAndTelephony();
     }
   }, [selectedDevice]);
 
@@ -3326,6 +3402,308 @@ function App() {
                               Haz clic en "Auditar Ahora" para escanear el estado de cuentas FRP y certificados de intercepción.
                             </div>
                           )}
+                        </div>
+
+                        {/* AUDITORÍA FORENSE: IMEI, TELEFONÍA, DIAGNÓSTICO DE BLOQUEOS & LISTA NEGRA */}
+                        <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 relative overflow-hidden mb-6">
+                          <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-6 gap-4">
+                            <div className="flex items-center space-x-3">
+                              <div className="p-2.5 bg-cyan-500/20 border border-cyan-500/30 rounded-xl">
+                                <Radio className="w-6 h-6 text-cyan-400" />
+                              </div>
+                              <div>
+                                <h4 className="text-xl font-bold text-slate-100 flex items-center gap-2">
+                                  <span>Inspección Forense de IMEI, Red & Lista Negra</span>
+                                  <span className="text-[10px] font-mono uppercase bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 px-2 py-0.5 rounded">RIL & 3GPP</span>
+                                </h4>
+                                <p className="text-xs text-slate-400 mt-0.5">Extracción de IMEI 1/2, verificación de algoritmo Luhn, códigos de rechazo en antena (EIR) y comprobación de SIMLock / Lista Negra.</p>
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                onClick={triggerImeiDialer}
+                                disabled={!selectedDevice}
+                                className="flex items-center space-x-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white px-3 py-2 rounded-xl text-xs font-bold border border-slate-600 transition-all shadow"
+                                title="Abre la pantalla oficial con el código de barras e IMEIs en el teléfono móvil"
+                              >
+                                <Smartphone className="w-3.5 h-3.5 text-cyan-400" />
+                                <span>Ver *#06# en Pantalla</span>
+                              </button>
+                              <button
+                                onClick={fetchImeiAndTelephony}
+                                disabled={isLoadingImei || isLoadingTelephony || !selectedDevice}
+                                className="flex items-center space-x-1.5 bg-cyan-600/20 hover:bg-cyan-600 text-cyan-400 hover:text-white px-4 py-2 rounded-xl text-xs font-bold border border-cyan-500/30 transition-all shadow"
+                              >
+                                <RefreshCw className={`w-3.5 h-3.5 ${(isLoadingImei || isLoadingTelephony) ? 'animate-spin' : ''}`} />
+                                <span>Auditar IMEI y Red</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          {dialerTriggerMsg && (
+                            <div className="mb-4 p-3 bg-cyan-950/40 border border-cyan-500/40 rounded-xl text-xs text-cyan-300 flex items-center justify-between animate-fade-in">
+                              <div className="flex items-center space-x-2">
+                                <CheckCircle2 className="w-4 h-4 text-cyan-400" />
+                                <span>{dialerTriggerMsg}</span>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* DICTAMEN FORENSE DE CAUSA DE BLOQUEO ("¿POR QUÉ ESTÁ BLOQUEADO?") */}
+                          {telephonyDiag?.verdict && (
+                            <div className={`p-4 rounded-xl border mb-6 ${
+                              telephonyDiag.verdict.status === 'danger'
+                                ? 'bg-red-950/30 border-red-500/50 text-red-200'
+                                : telephonyDiag.verdict.status === 'warning'
+                                ? 'bg-amber-950/30 border-amber-500/50 text-amber-200'
+                                : telephonyDiag.verdict.status === 'clean'
+                                ? 'bg-emerald-950/30 border-emerald-500/50 text-emerald-200'
+                                : 'bg-slate-800/60 border-slate-700 text-slate-300'
+                            }`}>
+                              <div className="flex items-start space-x-3">
+                                <div className="mt-0.5">
+                                  {telephonyDiag.verdict.status === 'danger' ? (
+                                    <XCircle className="w-5 h-5 text-red-400" />
+                                  ) : telephonyDiag.verdict.status === 'warning' ? (
+                                    <AlertTriangle className="w-5 h-5 text-amber-400" />
+                                  ) : telephonyDiag.verdict.status === 'clean' ? (
+                                    <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                                  ) : (
+                                    <Info className="w-5 h-5 text-sky-400" />
+                                  )}
+                                </div>
+                                <div className="flex-1">
+                                  <div className="flex items-center justify-between">
+                                    <h5 className="text-sm font-bold tracking-wide">{telephonyDiag.verdict.title}</h5>
+                                    <span className="text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded bg-black/40 border border-white/10">
+                                      Diagnóstico de Taller
+                                    </span>
+                                  </div>
+                                  <p className="text-xs mt-1.5 opacity-90 leading-relaxed">{telephonyDiag.verdict.explanation}</p>
+                                  {telephonyDiag.verdict.recommendation && (
+                                    <div className="mt-2 text-xs font-semibold flex items-center space-x-1.5 opacity-95">
+                                      <span className="text-white/60">Dictamen:</span>
+                                      <span>{telephonyDiag.verdict.recommendation}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* IDENTIFICADORES IMEI EXTRAÍDOS */}
+                          <div className="mb-6">
+                            <h5 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3 flex items-center justify-between">
+                              <span className="flex items-center gap-2">
+                                <Hash className="w-4 h-4 text-cyan-400" />
+                                <span>Identificadores IMEI Detectados (Extracción por Hardware)</span>
+                              </span>
+                              {imeiData?.methodUsed && (
+                                <span className="text-[10px] font-mono text-cyan-400/80 lowercase">
+                                  canal: {imeiData.methodUsed}
+                                </span>
+                              )}
+                            </h5>
+
+                            {imeiData?.imeis && imeiData.imeis.length > 0 ? (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {imeiData.imeis.map((item: any) => (
+                                  <div key={item.slot} className="bg-slate-950/70 border border-slate-800 rounded-xl p-4 flex flex-col justify-between space-y-3">
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-xs font-bold text-slate-300">
+                                        Ranura {item.slot} {item.slot === 1 ? '(SIM Principal)' : '(eSIM / Ranura 2)'}
+                                      </span>
+                                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                                        item.luhnValid 
+                                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' 
+                                          : 'bg-red-500/20 text-red-300 border-red-500/40'
+                                      }`}>
+                                        {item.luhnValid ? '✓ Algoritmo Luhn Válido' : '⚠️ Checksum Inválido'}
+                                      </span>
+                                    </div>
+
+                                    <div className="bg-slate-900 border border-slate-800/80 rounded-lg p-3 flex items-center justify-between">
+                                      <div>
+                                        <div className="text-[10px] text-slate-500 uppercase font-mono">IMEI Completo</div>
+                                        <div className="text-lg font-mono font-black tracking-wider text-slate-100 select-all">
+                                          {item.imei}
+                                        </div>
+                                      </div>
+                                      <button
+                                        onClick={() => handleCopyImei(item.imei, item.slot)}
+                                        className="p-2 hover:bg-slate-800 text-slate-400 hover:text-cyan-300 rounded-lg transition-colors border border-transparent hover:border-slate-700"
+                                        title="Copiar IMEI al portapapeles"
+                                      >
+                                        {copiedImeiSlot === item.slot ? (
+                                          <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1">
+                                            <CheckCircle2 className="w-3.5 h-3.5" /> Copiado
+                                          </span>
+                                        ) : (
+                                          <Copy className="w-4 h-4" />
+                                        )}
+                                      </button>
+                                    </div>
+
+                                    <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 pt-1 border-t border-slate-800/60">
+                                      <span>Código TAC: <strong className="text-slate-300">{item.tac}</strong></span>
+                                      <span>Modelo: <strong className="text-cyan-300">{imeiData.model || 'SM'}</strong></span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="bg-slate-950/40 border border-slate-800 border-dashed rounded-xl p-5 text-center text-xs text-slate-400">
+                                {isLoadingImei ? (
+                                  <div className="flex items-center justify-center space-x-2 text-cyan-400">
+                                    <RefreshCw className="w-4 h-4 animate-spin" />
+                                    <span>Extrayendo identificadores de hardware por ADB...</span>
+                                  </div>
+                                ) : (
+                                  <div>
+                                    <p className="mb-2">No se han extraído los identificadores IMEI del terminal actual.</p>
+                                    <button
+                                      onClick={fetchImeiAndTelephony}
+                                      className="px-4 py-1.5 bg-cyan-600/30 hover:bg-cyan-600 text-cyan-300 hover:text-white rounded-lg text-xs font-bold border border-cyan-500/40 transition-all"
+                                    >
+                                      Consultar IMEI Ahora
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* TELEMETRÍA DETALLADA DE RED & 3GPP */}
+                          {telephonyDiag && (
+                            <div className="mb-6 bg-slate-950/40 border border-slate-800 rounded-xl p-4">
+                              <h5 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3 flex items-center space-x-2">
+                                <Signal className="w-4 h-4 text-cyan-400" />
+                                <span>Telemetría de Red Celular & Causa de Rechazo 3GPP</span>
+                              </h5>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                                <div className="p-3 bg-slate-900/80 rounded-lg border border-slate-800">
+                                  <div className="text-[10px] text-slate-400 uppercase font-bold">Código Rechazo Antena</div>
+                                  <div className={`font-mono font-bold mt-1 text-sm ${telephonyDiag.telephony.rejectCause > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                                    {telephonyDiag.telephony.rejectCause > 0 ? `Causa ${telephonyDiag.telephony.rejectCause}` : '0 (Sin rechazo)'}
+                                  </div>
+                                  <div className="text-[10px] text-slate-400 mt-1 truncate" title={telephonyDiag.telephony.rejectCauseInfo?.description}>
+                                    {telephonyDiag.telephony.rejectCauseInfo?.title}
+                                  </div>
+                                </div>
+
+                                <div className="p-3 bg-slate-900/80 rounded-lg border border-slate-800">
+                                  <div className="text-[10px] text-slate-400 uppercase font-bold">Tarjeta SIM / Operador</div>
+                                  <div className="font-mono font-bold mt-1 text-sm text-slate-200 truncate">
+                                    {telephonyDiag.sim.state.replace(/,/g, ' / ')}
+                                  </div>
+                                  <div className="text-[10px] text-cyan-400 mt-1">
+                                    PLMN: {telephonyDiag.sim.operatorNumeric || 'N/A'} {telephonyDiag.sim.operatorName !== 'N/A' ? `(${telephonyDiag.sim.operatorName})` : ''}
+                                  </div>
+                                </div>
+
+                                <div className="p-3 bg-slate-900/80 rounded-lg border border-slate-800">
+                                  <div className="text-[10px] text-slate-400 uppercase font-bold">Registro de Voz & Red</div>
+                                  <div className="font-mono font-bold mt-1 text-sm text-slate-200 truncate">
+                                    {telephonyDiag.telephony.voiceRegState.split(' ')[0]}
+                                  </div>
+                                  <div className={`text-[10px] mt-1 font-semibold ${telephonyDiag.telephony.isEmergencyOnly ? 'text-amber-400' : 'text-emerald-400'}`}>
+                                    {telephonyDiag.telephony.isEmergencyOnly ? '⚠️ Solo Emergencia' : '✓ Normal'}
+                                  </div>
+                                </div>
+
+                                <div className="p-3 bg-slate-900/80 rounded-lg border border-slate-800">
+                                  <div className="text-[10px] text-slate-400 uppercase font-bold">Financiamiento / Knox</div>
+                                  <div className="font-mono font-bold mt-1 text-sm text-slate-200">
+                                    Knox KG: <span className={telephonyDiag.security.knoxGuardState === 'Locked' ? 'text-red-400' : 'text-emerald-400'}>{telephonyDiag.security.knoxGuardState}</span>
+                                  </div>
+                                  <div className="text-[10px] text-slate-400 mt-1 truncate">
+                                    {telephonyDiag.security.financeLockDetected ? telephonyDiag.security.financeAppName : 'Sin software de crédito'}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* CONSULTOR DE LISTA NEGRA CON ENTES REGULADORES & VALIDADOR MANUAL */}
+                          <div className="border-t border-slate-800 pt-5">
+                            <div className="flex items-center justify-between mb-3">
+                              <h5 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center space-x-2">
+                                <ExternalLink className="w-4 h-4 text-cyan-400" />
+                                <span>Verificación en Entes Reguladores Oficiales (Lista Negra)</span>
+                              </h5>
+                              <span className="text-[11px] text-slate-400">Consulta pública oficial por país</span>
+                            </div>
+
+                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 mb-4">
+                              {(imeiData?.regulatorLinks || [
+                                { country: 'Costa Rica', entity: 'SUTEL', flag: '🇨🇷', url: 'https://sutel.go.cr/servicios/plataforma-de-celulares-robados' },
+                                { country: 'México', entity: 'IFT', flag: '🇲🇽', url: 'http://www.ift.org.mx/usuarios-y-audiencias/consulta-de-imei' },
+                                { country: 'Argentina', entity: 'ENACOM', flag: '🇦🇷', url: 'https://www.enacom.gob.ar/imei' },
+                                { country: 'Colombia', entity: 'CRC / SRIM', flag: '🇨🇴', url: 'https://www.sr-im.gov.co/' },
+                                { country: 'Perú', entity: 'OSIPTEL', flag: '🇵🇪', url: 'https://www.osiptel.gob.pe/sistemas/sigem.html' },
+                                { country: 'Estados Unidos', entity: 'Swappa', flag: '🇺🇸', url: 'https://swappa.com/imei' },
+                                { country: 'Internacional', entity: 'IMEI24 / GSMA', flag: '🌐', url: 'https://imei24.com/es/' }
+                              ]).map((link: any, idx: number) => (
+                                <a
+                                  key={idx}
+                                  href={link.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="p-2.5 bg-slate-950/60 hover:bg-slate-800/80 border border-slate-800 hover:border-cyan-500/50 rounded-xl flex items-center justify-between group transition-all"
+                                >
+                                  <div className="flex items-center space-x-2 overflow-hidden">
+                                    <span className="text-base">{link.flag}</span>
+                                    <div className="truncate">
+                                      <div className="text-xs font-bold text-slate-200 group-hover:text-cyan-300 transition-colors truncate">
+                                        {link.entity}
+                                      </div>
+                                      <div className="text-[10px] text-slate-400 truncate">{link.country}</div>
+                                    </div>
+                                  </div>
+                                  <ExternalLink className="w-3.5 h-3.5 text-slate-500 group-hover:text-cyan-400 transition-colors shrink-0 ml-1" />
+                                </a>
+                              ))}
+                            </div>
+
+                            {/* VALIDADOR DE IMEI MANUAL */}
+                            <div className="bg-slate-950/40 border border-slate-800/80 rounded-xl p-3 flex flex-col sm:flex-row items-center gap-3">
+                              <div className="flex-1 w-full flex items-center space-x-2">
+                                <Search className="w-4 h-4 text-slate-400 shrink-0" />
+                                <input
+                                  type="text"
+                                  placeholder="Probar otro IMEI de 15 dígitos..."
+                                  value={manualImeiInput}
+                                  onChange={(e) => setManualImeiInput(e.target.value)}
+                                  className="bg-transparent text-xs font-mono text-slate-200 focus:outline-none w-full placeholder-slate-500"
+                                  maxLength={15}
+                                />
+                              </div>
+                              <button
+                                onClick={validateManualImei}
+                                disabled={isCheckingManualImei || !manualImeiInput.trim()}
+                                className="w-full sm:w-auto px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-lg text-xs font-bold border border-slate-700 transition-all shrink-0"
+                              >
+                                {isCheckingManualImei ? 'Verificando...' : 'Calcular Luhn & TAC'}
+                              </button>
+                            </div>
+
+                            {manualImeiResult && (
+                              <div className="mt-3 p-3 bg-slate-900 border border-slate-800 rounded-xl text-xs flex items-center justify-between font-mono animate-fade-in">
+                                <div>
+                                  <span className="text-slate-400">IMEI:</span> <strong className="text-slate-200">{manualImeiResult.imei}</strong>
+                                  <span className="mx-2 text-slate-600">|</span>
+                                  <span className="text-slate-400">TAC:</span> <strong className="text-cyan-300">{manualImeiResult.tac || 'N/A'}</strong>
+                                </div>
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                                  manualImeiResult.luhnValid
+                                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                                    : 'bg-red-500/20 text-red-300 border-red-500/40'
+                                }`}>
+                                  {manualImeiResult.luhnValid ? '✓ Algoritmo Luhn Válido' : '⚠️ Formato o Checksum Inválido'}
+                                </span>
+                              </div>
+                            )}
+                          </div>
                         </div>
 
                         {/* MALWARE SCANNER MODULE */}
@@ -5536,10 +5914,48 @@ function App() {
                   </div>
                 </div>
 
-                {/* 4. Diagnóstico Técnico y Recomendaciones */}
+                {/* 4. Identificadores de Hardware (IMEI) y Estado de Bloqueos / Red */}
+                <div className="mb-6">
+                  <h2 className="text-xs font-bold uppercase tracking-wider bg-slate-100 text-slate-800 px-3 py-1.5 border-l-4 border-slate-900 mb-3">
+                    4. Identificadores IMEI y Diagnóstico de Red / Bloqueos
+                  </h2>
+                  <div className="grid grid-cols-2 gap-4 text-xs font-mono">
+                    <div className="p-3 border border-slate-200 rounded">
+                      <div className="font-bold text-slate-900 mb-1 font-sans">Identificadores IMEI:</div>
+                      {imeiData?.imeis?.length > 0 ? (
+                        <div className="space-y-1">
+                          {imeiData.imeis.map((im: any) => (
+                            <div key={im.slot} className="text-slate-800">
+                              Ranura {im.slot}: <strong className="font-bold">{im.imei}</strong> {im.luhnValid ? '✓ (Luhn OK)' : '⚠️ (Inválido)'}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-slate-500">IMEI protegido por permisos del sistema o no extraído.</div>
+                      )}
+                    </div>
+                    <div className="p-3 border border-slate-200 rounded">
+                      <div className="font-bold text-slate-900 mb-1 font-sans">Estado de Antena y Bloqueos:</div>
+                      {telephonyDiag?.verdict ? (
+                        <div>
+                          <div className={`font-bold ${telephonyDiag.verdict.status === 'danger' ? 'text-red-700' : telephonyDiag.verdict.status === 'warning' ? 'text-amber-700' : 'text-emerald-700'}`}>
+                            {telephonyDiag.verdict.title}
+                          </div>
+                          <div className="text-[10px] text-slate-600 mt-1 font-sans">
+                            {telephonyDiag.verdict.explanation}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-slate-500">Sin diagnóstico de telefonía registrado.</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 5. Diagnóstico Técnico y Recomendaciones */}
                 <div className="mb-8">
                   <h2 className="text-xs font-bold uppercase tracking-wider bg-slate-100 text-slate-800 px-3 py-1.5 border-l-4 border-slate-900 mb-2">
-                    4. Dictamen del Laboratorio y Observaciones
+                    5. Dictamen del Laboratorio y Observaciones
                   </h2>
                   <div className="border border-slate-200 rounded p-3 text-xs text-slate-700 min-h-[70px]">
                     <p className="mb-1">El equipo ha completado las pruebas de diagnóstico automatizado bajo estándares de taller. La integridad de software, almacenamiento y módulos principales de hardware se encuentran documentados en este peritaje.</p>

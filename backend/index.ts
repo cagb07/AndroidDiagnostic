@@ -2812,6 +2812,372 @@ app.get('/api/device/:id/security/audit', async (req, res) => {
 });
 
 // ==========================================
+// FORENSIC IMEI, TELEPHONY & BLACKLIST AUDIT
+// ==========================================
+
+function validateLuhn(imei: string): boolean {
+  const clean = imei.replace(/\D/g, '');
+  if (clean.length !== 15) return false;
+  let sum = 0;
+  for (let i = 0; i < 15; i++) {
+    let digit = parseInt(clean.charAt(i), 10);
+    if (i % 2 !== 0) {
+      digit *= 2;
+      if (digit > 9) digit = Math.floor(digit / 10) + (digit % 10);
+    }
+    sum += digit;
+  }
+  return sum % 10 === 0;
+}
+
+const REJECT_CAUSE_MAP: Record<number, { title: string; severity: 'critical' | 'warning' | 'info'; description: string }> = {
+  0: { title: 'Sin rechazo registrado', severity: 'info', description: 'La red no ha emitido códigos de denegación 3GPP.' },
+  2: { title: 'IMSI Desconocido en HLR', severity: 'warning', description: 'La tarjeta SIM no está dada de alta en el sistema del operador.' },
+  3: { title: 'Illegal MS (Tarjeta SIM Denegada)', severity: 'critical', description: 'El operador ha suspendido o cancelado esta tarjeta SIM / línea celular.' },
+  6: { title: 'Illegal ME (IMEI en Lista Negra / Reportado)', severity: 'critical', description: 'El IMEI ha sido bloqueado en el registro EIR del operador por reporte de robo, hurto o pérdida.' },
+  7: { title: 'Servicios GPRS / Datos No Autorizados', severity: 'warning', description: 'El operador restringe el tráfico de datos para este terminal.' },
+  8: { title: 'Servicios de Voz y Datos No Permitidos', severity: 'critical', description: 'Terminal completamente bloqueado en la red del operador.' },
+  11: { title: 'PLMN No Permitido (Posible SIMLock)', severity: 'warning', description: 'Dispositivo intentando registrarse en un operador no admitido (Bloqueo de red/compañía).' },
+  12: { title: 'Área de Localización No Permitida', severity: 'info', description: 'Restricción de zona geográfica o celda celular.' },
+  13: { title: 'Roaming No Autorizado', severity: 'info', description: 'El dispositivo no tiene habilitado el roaming en este operador.' },
+  14: { title: 'GPRS No Permitido en este PLMN', severity: 'warning', description: 'Sin autorización de paquetes de datos en esta red.' },
+  15: { title: 'Sin Celdas Adecuadas (No Suitable Cells)', severity: 'info', description: 'Búsqueda de cobertura o bandas de frecuencia incompatibles.' },
+  17: { title: 'Fallo de Red / Barred (Posible Bloqueo Administrativo o Lista Negra)', severity: 'critical', description: 'Conexión denegada por el operador. Frecuente en terminales con mora de pago o IMEI no homologado.' },
+  22: { title: 'Congestión de Red', severity: 'info', description: 'Torre de telecomunicaciones saturada temporalmente.' }
+};
+
+const REGULATOR_LINKS = [
+  { country: 'Costa Rica', entity: 'SUTEL', flag: '🇨🇷', url: 'https://sutel.go.cr/servicios/plataforma-de-celulares-robados', note: 'Consulta oficial SUTEL Celulares Robados' },
+  { country: 'México', entity: 'IFT', flag: '🇲🇽', url: 'http://www.ift.org.mx/usuarios-y-audiencias/consulta-de-imei', note: 'Registro IFT de equipos robados / extraviados' },
+  { country: 'Argentina', entity: 'ENACOM', flag: '🇦🇷', url: 'https://www.enacom.gob.ar/imei', note: 'Base de datos pública de IMEI bloqueados' },
+  { country: 'Colombia', entity: 'CRC / SRIM', flag: '🇨🇴', url: 'https://www.sr-im.gov.co/', note: 'Sistema de Registro de Terminales Móviles' },
+  { country: 'Perú', entity: 'OSIPTEL', flag: '🇵🇪', url: 'https://www.osiptel.gob.pe/sistemas/sigem.html', note: 'Consulta de equipos bloqueados / robados' },
+  { country: 'Estados Unidos', entity: 'Swappa / CTIA', flag: '🇺🇸', url: 'https://swappa.com/imei', note: 'Verificador de ESN / IMEI Clean & Blacklist' },
+  { country: 'Internacional', entity: 'IMEI24 / GSMA', flag: '🌐', url: 'https://imei24.com/es/', note: 'Comprobador global de Lista Negra GSMA' }
+];
+
+// 1. Extraer IMEI(s) del dispositivo conectado
+app.get('/api/device/:id/imei/extract', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const imeis: Array<{ slot: number; imei: string; luhnValid: boolean; tac: string }> = [];
+    let methodUsed = 'desconocido';
+
+    // Obtener propiedades básicas del modelo
+    const { stdout: modelOut } = await execAsync(`${ADB_PATH} -s ${id} shell getprop ro.product.model`).catch(() => ({ stdout: '' }));
+    const { stdout: brandOut } = await execAsync(`${ADB_PATH} -s ${id} shell getprop ro.product.manufacturer`).catch(() => ({ stdout: '' }));
+    const { stdout: serialOut } = await execAsync(`${ADB_PATH} -s ${id} shell getprop ro.serialno`).catch(() => ({ stdout: id }));
+    const model = modelOut.trim();
+    const brand = brandOut.trim();
+    const serial = serialOut.trim() || id;
+
+    // Verificar si está en modo fastboot
+    let isFastboot = false;
+    try {
+      const { stdout: fbOut } = await execAsync(`${FASTBOOT_PATH} devices 2>/dev/null || true`);
+      if (fbOut.includes(id)) isFastboot = true;
+    } catch {}
+
+    if (isFastboot) {
+      try {
+        const { stderr: fbImei } = await execAsync(`${FASTBOOT_PATH} -s ${id} getvar imei 2>&1 || true`);
+        const match = fbImei.match(/imei:\s*([0-9]{15})/i);
+        if (match) {
+          imeis.push({
+            slot: 1,
+            imei: match[1],
+            luhnValid: validateLuhn(match[1]),
+            tac: match[1].substring(0, 8)
+          });
+          methodUsed = 'fastboot_getvar';
+        }
+      } catch {}
+    } else {
+      // Método A: Inspección automatizada rápida de UI Settings (funciona en Android 10-15 sin Root)
+      try {
+        const dumpCmd = `${ADB_PATH} -s ${id} shell "am start -a android.settings.DEVICE_INFO_SETTINGS >/dev/null 2>&1 && sleep 0.6 && uiautomator dump /data/local/tmp/imei_dump.xml >/dev/null 2>&1 && input keyevent 4 >/dev/null 2>&1 && cat /data/local/tmp/imei_dump.xml 2>/dev/null"`;
+        const { stdout: xmlOut } = await execAsync(dumpCmd);
+        
+        if (xmlOut && xmlOut.includes('<node')) {
+          const matches = xmlOut.match(/\b[0-9]{15}\b/g);
+          if (matches) {
+            const unique = Array.from(new Set(matches));
+            unique.forEach((num, index) => {
+              imeis.push({
+                slot: index + 1,
+                imei: num,
+                luhnValid: validateLuhn(num),
+                tac: num.substring(0, 8)
+              });
+            });
+            if (imeis.length > 0) methodUsed = 'automated_ui_dump';
+          }
+        }
+      } catch {}
+
+      // Método B: Fallback para dispositivos rooteados o Android 9 o inferior (RIL / iphonesubinfo)
+      if (imeis.length === 0) {
+        try {
+          const { stdout: subOut } = await execAsync(`${ADB_PATH} -s ${id} shell service call iphonesubinfo 1 2>/dev/null || true`);
+          const digits = subOut.replace(/[^0-9]/g, '');
+          const match = digits.match(/[0-9]{15}/);
+          if (match) {
+            imeis.push({
+              slot: 1,
+              imei: match[0],
+              luhnValid: validateLuhn(match[0]),
+              tac: match[0].substring(0, 8)
+            });
+            methodUsed = 'iphonesubinfo_service';
+          }
+        } catch {}
+      }
+
+      // Método C: Propiedades persistentes de módem
+      if (imeis.length === 0) {
+        try {
+          const { stdout: propImei } = await execAsync(`${ADB_PATH} -s ${id} shell "getprop persist.radio.imei || getprop gsm.baseband.imei || getprop ril.serialnumber" 2>/dev/null || true`);
+          const match = propImei.trim().match(/[0-9]{15}/);
+          if (match) {
+            imeis.push({
+              slot: 1,
+              imei: match[0],
+              luhnValid: validateLuhn(match[0]),
+              tac: match[0].substring(0, 8)
+            });
+            methodUsed = 'system_properties';
+          }
+        } catch {}
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        imeis,
+        serial,
+        model,
+        brand,
+        isDualSim: imeis.length > 1,
+        methodUsed,
+        regulatorLinks: REGULATOR_LINKS
+      }
+    });
+  } catch (err: any) {
+    handleAdbError(res, err, 'Error al extraer IMEI del dispositivo');
+  }
+});
+
+// 2. Disparar *#06# o menú de estado en la pantalla física del teléfono
+app.post('/api/device/:id/imei/trigger-dialer', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await execAsync(`${ADB_PATH} -s ${id} shell am start -a android.intent.action.DIAL -d "tel:*%2306%23" >/dev/null 2>&1`);
+    res.json({
+      success: true,
+      message: 'Comando *#06# ejecutado. Verifica la pantalla del dispositivo para ver el IMEI y código de barras.'
+    });
+  } catch (err: any) {
+    handleAdbError(res, err, 'Error al abrir marcador en dispositivo');
+  }
+});
+
+// 3. Auditoría Forense de Telefonía, Causa de Rechazo 3GPP & Diagnóstico de Bloqueo
+app.get('/api/device/:id/telephony/diagnostics', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // A. Consultar registro de telefonía
+    const { stdout: telOut } = await execAsync(`${ADB_PATH} -s ${id} shell dumpsys telephony.registry 2>/dev/null || true`);
+    
+    // B. Consultar propiedades de SIM y operador
+    const { stdout: simStateRaw } = await execAsync(`${ADB_PATH} -s ${id} shell getprop gsm.sim.state 2>/dev/null || true`);
+    const { stdout: opAlphaRaw } = await execAsync(`${ADB_PATH} -s ${id} shell getprop gsm.operator.alpha 2>/dev/null || true`);
+    const { stdout: opNumericRaw } = await execAsync(`${ADB_PATH} -s ${id} shell getprop gsm.operator.numeric 2>/dev/null || true`);
+    const { stdout: kgStateRaw } = await execAsync(`${ADB_PATH} -s ${id} shell getprop knox.kg.state 2>/dev/null || true`);
+
+    const simState = simStateRaw.trim() || 'Desconocido';
+    const operatorName = opAlphaRaw.trim().replace(/^,+|,+$/g, '') || 'N/A';
+    const operatorNumeric = opNumericRaw.trim().replace(/^,+|,+$/g, '') || 'N/A';
+    const knoxKgState = kgStateRaw.trim() || 'N/A';
+
+    // C. Analizar dumpsys telephony.registry para extraer rechazo 3GPP y estado de emergencia
+    let rejectCause = 0;
+    const rejectMatches = telOut.match(/rejectCause=([0-9]+)/g);
+    if (rejectMatches) {
+      for (const m of rejectMatches) {
+        const val = parseInt(m.split('=')[1], 10);
+        if (val > 0) {
+          rejectCause = val;
+          break;
+        }
+      }
+    }
+
+    let isEmergencyOnly = false;
+    if (telOut.includes('mIsEmergencyOnly=true') || telOut.includes('emergencyEnabled=true')) {
+      isEmergencyOnly = true;
+    }
+
+    let voiceRegState = 'Desconocido';
+    if (telOut.includes('mVoiceRegState=0') || telOut.includes('mVoiceRegState=IN_SERVICE')) voiceRegState = 'En Servicio (IN_SERVICE)';
+    else if (telOut.includes('mVoiceRegState=1') || telOut.includes('mVoiceRegState=OUT_OF_SERVICE')) voiceRegState = 'Sin Servicio (OUT_OF_SERVICE)';
+    else if (telOut.includes('mVoiceRegState=2') || telOut.includes('mVoiceRegState=EMERGENCY_ONLY')) voiceRegState = 'Solo Emergencia (EMERGENCY_ONLY)';
+
+    let dataRegState = 'Desconocido';
+    if (telOut.includes('mDataRegState=0') || telOut.includes('mDataRegState=IN_SERVICE')) dataRegState = 'Conectado (IN_SERVICE)';
+    else if (telOut.includes('mDataRegState=1') || telOut.includes('mDataRegState=OUT_OF_SERVICE')) dataRegState = 'Desconectado (OUT_OF_SERVICE)';
+
+    // D. Detección de Bloqueos MDM / Financiamiento (PayJoy, Knox Guard, etc.)
+    let financeLockDetected = false;
+    let financeAppName = '';
+    try {
+      const { stdout: dpmOut } = await execAsync(`${ADB_PATH} -s ${id} shell dumpsys device_policy 2>/dev/null || true`);
+      const financePackages = [
+        { pkg: 'com.payjoy.access', name: 'PayJoy Access (Bloqueo Financiero)' },
+        { pkg: 'com.claro.seguridad', name: 'Claro MDM / Bloqueo Terminal' },
+        { pkg: 'com.trustonic.tidas', name: 'Trustonic / Samsung Finance+' },
+        { pkg: 'com.nuovopay', name: 'NuovoPay Device Lock' },
+        { pkg: 'com.kugroup.deviceprotection', name: 'Payphone / Krepis Lock' },
+        { pkg: 'com.macropay', name: 'Macropay Financiamiento' }
+      ];
+      for (const f of financePackages) {
+        if (dpmOut.includes(f.pkg)) {
+          financeLockDetected = true;
+          financeAppName = f.name;
+          break;
+        }
+      }
+    } catch {}
+
+    if (knoxKgState.toLowerCase() === 'locked') {
+      financeLockDetected = true;
+      financeAppName = 'Samsung Knox Guard (Dispositivo Bloqueado por Falta de Pago)';
+    }
+
+    // E. Generar Dictamen Forense Sintético ("¿Por qué está bloqueado?")
+    let verdict = {
+      status: 'clean',
+      type: 'OPERATIONAL',
+      title: '✅ RED Y MÓDEM OPERATIVOS',
+      explanation: 'No se detectaron bloqueos de operador (SIMLock), rechazos de antena 3GPP ni bloqueos de financiamiento en las consultas de radio.',
+      recommendation: 'El hardware celular responde con normalidad.'
+    };
+
+    const isSimAbsent = simState.includes('ABSENT') || simState === '1';
+    const isNetworkLocked = simState.includes('NETWORK_LOCKED') || simState === '4' || rejectCause === 11;
+
+    if (rejectCause === 6) {
+      verdict = {
+        status: 'danger',
+        type: 'BLACKLIST_EIR',
+        title: '⚠️ REPORTE EN LISTA NEGRA CONFIRMADO (Illegal ME)',
+        explanation: 'La torre celular ha denegado la conexión del equipo emitiendo el código 3GPP Causa 6 (Illegal Mobile Equipment). El IMEI se encuentra reportado por robo, hurto o pérdida en el registro EIR del operador.',
+        recommendation: 'El terminal no podrá registrarse en ninguna red celular del país hasta que se aclare el reporte ante el operador o ente regulador.'
+      };
+    } else if (rejectCause === 17 && isEmergencyOnly) {
+      verdict = {
+        status: 'danger',
+        type: 'NETWORK_BARRED',
+        title: '⚠️ RECHAZO DE RED / POSIBLE LISTA NEGRA (Barred)',
+        explanation: 'La antena celular rechazó la conexión del equipo (Causa 17: Network failure / Barred). Es común en terminales con mora de pago, IMEI no homologado o listas de restricción administrativa.',
+        recommendation: 'Verifica el IMEI en el portal del ente regulador o contacta a la compañía telefónica.'
+      };
+    } else if (isNetworkLocked) {
+      verdict = {
+        status: 'warning',
+        type: 'CARRIER_LOCK',
+        title: '🔒 BLOQUEO DE OPERADOR ACTIVO (SIMLock)',
+        explanation: 'El terminal está restringido para una compañía telefónica específica. Requiere código NCK/MCK o liberación de subsidio para funcionar con esta tarjeta SIM.',
+        recommendation: 'Solicita el código de desbloqueo de red (NCK) al operador de origen o realiza liberación por software/caja.'
+      };
+    } else if (financeLockDetected) {
+      verdict = {
+        status: 'danger',
+        type: 'FINANCE_LOCK',
+        title: `💳 BLOQUEO FINANCIERO ACTIVO (${financeAppName})`,
+        explanation: `El terminal está vinculado a un plan de financiamiento comercial restringido por software MDM (${financeAppName}).`,
+        recommendation: 'Se debe saldar el crédito comercial o gestionar el desbloqueo con la entidad financiera correspondiente.'
+      };
+    } else if (isEmergencyOnly && !isSimAbsent) {
+      verdict = {
+        status: 'warning',
+        type: 'EMERGENCY_ONLY',
+        title: '⚠️ SOLO LLAMADAS DE EMERGENCIA',
+        explanation: 'El dispositivo tiene una tarjeta SIM insertada pero no logra registrar servicio de voz ni datos. Puede tratarse de un IMEI reportado en antena, una SIM suspendida o falla en el circuito de radiofrecuencia (RF).',
+        recommendation: 'Prueba con otra tarjeta SIM de distinta compañía para descartar suspensión de línea.'
+      };
+    } else if (isSimAbsent) {
+      verdict = {
+        status: 'info',
+        type: 'NO_SIM',
+        title: 'ℹ️ SIN TARJETA SIM INSERTADA',
+        explanation: 'No hay tarjeta SIM física ni eSIM activo en el terminal. Para diagnosticar si las antenas locales rechazan el IMEI por lista negra, inserta una SIM activa de prueba.',
+        recommendation: 'Inserta una tarjeta SIM con línea activa para auditar la respuesta de la antena celular.'
+      };
+    }
+
+    res.json({
+      success: true,
+      data: {
+        verdict,
+        telephony: {
+          voiceRegState,
+          dataRegState,
+          isEmergencyOnly,
+          rejectCause,
+          rejectCauseInfo: REJECT_CAUSE_MAP[rejectCause] || {
+            title: `Causa 3GPP ${rejectCause}`,
+            severity: 'warning',
+            description: 'Código de rechazo de red emitido por la celda celular.'
+          }
+        },
+        sim: {
+          state: simState,
+          operatorName,
+          operatorNumeric
+        },
+        security: {
+          knoxGuardState: knoxKgState,
+          financeLockDetected,
+          financeAppName
+        }
+      }
+    });
+  } catch (err: any) {
+    handleAdbError(res, err, 'Error al diagnosticar estado de telefonía y bloqueos');
+  }
+});
+
+// 4. Validador de IMEI manual y generador de enlaces de reguladores
+app.post('/api/imei/validate', async (req, res) => {
+  try {
+    const { imei } = req.body;
+    if (!imei || typeof imei !== 'string') {
+      return res.status(400).json({ success: false, error: 'IMEI no proporcionado' });
+    }
+
+    const clean = imei.replace(/\D/g, '');
+    const luhnValid = validateLuhn(clean);
+    const tac = clean.length >= 8 ? clean.substring(0, 8) : '';
+
+    res.json({
+      success: true,
+      data: {
+        imei: clean,
+        length: clean.length,
+        isFormatValid: clean.length === 15,
+        luhnValid,
+        tac,
+        regulatorLinks: REGULATOR_LINKS
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ==========================================
 // SAMSUNG ODIN FLASHER (ODINMAC ENGINE / HEIMDALL)
 // ==========================================
 
