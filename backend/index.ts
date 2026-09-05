@@ -266,10 +266,15 @@ function handleAdbError(res: express.Response, err: any, defaultMsg: string = 'E
   return res.status(400).json({ success: false, error: `${defaultMsg}: ${msg}` });
 }
 
+function isOdinDevice(id?: string): boolean {
+  if (!id) return false;
+  return id === 'SAMSUNG-ODIN-MODE' || id.includes('ODIN') || id.includes('DOWNLOAD');
+}
+
 app.get('/api/device/:id/info', async (req, res) => {
   try {
     const { id } = req.params;
-    if (id === 'SAMSUNG-ODIN-MODE' || id.includes('ODIN') || id.includes('DOWNLOAD')) {
+    if (isOdinDevice(id)) {
       return res.json({
         success: true,
         data: {
@@ -365,7 +370,7 @@ app.get('/api/device/:id/info', async (req, res) => {
 app.get('/api/device/:id/battery', async (req, res) => {
   try {
     const { id } = req.params;
-    if (id === 'SAMSUNG-ODIN-MODE' || id.includes('ODIN') || id.includes('DOWNLOAD')) {
+    if (isOdinDevice(id)) {
       return res.json({
         success: true,
         data: {
@@ -403,6 +408,18 @@ app.get('/api/device/:id/battery', async (req, res) => {
 app.get('/api/device/:id/diagnostics/advanced', async (req, res) => {
   try {
     const { id } = req.params;
+    if (isOdinDevice(id)) {
+      return res.json({
+        success: true,
+        data: {
+          cpu: [],
+          storage: [],
+          batteryCycles: 'N/A',
+          kernel: 'Samsung Loke Bootloader',
+          uptime: 'Modo Descarga'
+        }
+      });
+    }
     
     // 1. CPU Info (Top 3 apps)
     let topCpu = [];
@@ -537,6 +554,9 @@ app.post('/api/device/:id/test/:type', async (req, res) => {
 app.get('/api/device/:id/sensors', async (req, res) => {
   try {
     const { id } = req.params;
+    if (isOdinDevice(id)) {
+      return res.json({ success: true, sensors: [] });
+    }
     const { stdout } = await execAsync(`${ADB_PATH} -s ${id} shell dumpsys sensorservice`);
     
     // Parse the dumpsys output to find the "Sensor List:" section
@@ -579,6 +599,9 @@ app.get('/api/device/:id/sensors', async (req, res) => {
 app.get('/api/device/:id/apps', async (req, res) => {
   try {
     const { id } = req.params;
+    if (isOdinDevice(id)) {
+      return res.json({ success: true, apps: [] });
+    }
     
     const { stdout: sysOut } = await execAsync(`${ADB_PATH} -s ${id} shell pm list packages -s`);
     const systemApps = sysOut.split('\n').map(line => line.replace('package:', '').trim()).filter(line => line.length > 0);
@@ -2116,6 +2139,18 @@ app.post('/api/device/:id/input', async (req, res) => {
 app.get('/api/device/:id/thermal', async (req, res) => {
   try {
     const { id } = req.params;
+    if (isOdinDevice(id)) {
+      return res.json({
+        success: true,
+        data: {
+          timestamp: new Date().toLocaleTimeString(),
+          batteryTemp: 30,
+          ramUsagePercent: 0,
+          cpuUsagePercent: 0,
+          thermalZones: []
+        }
+      });
+    }
     
     // 1. Battery Temp
     let batteryTemp = 0;
@@ -2743,6 +2778,24 @@ app.post('/api/device/:id/selftest', async (req, res) => {
 app.get('/api/device/:id/security/audit', async (req, res) => {
   try {
     const { id } = req.params;
+    if (isOdinDevice(id)) {
+      return res.json({
+        success: true,
+        data: {
+          userCertificatesCount: 0,
+          userCertificates: [],
+          userCAs: [],
+          hasCustomCertificates: false,
+          hasUserCAs: false,
+          googleAccounts: [],
+          samsungAccounts: [],
+          accounts: { google: [], samsung: [] },
+          frpRisk: 'Desconocido (Modo Descarga)',
+          oemUnlockAllowed: 'Desconocido',
+          seLinuxStatus: 'N/A'
+        }
+      });
+    }
     
     // 1. User CA Certificates
     const userCacerts: string[] = [];
@@ -2860,6 +2913,21 @@ const REGULATOR_LINKS = [
 app.get('/api/device/:id/imei/extract', async (req, res) => {
   try {
     const { id } = req.params;
+    if (isOdinDevice(id)) {
+      return res.json({
+        success: true,
+        data: {
+          imeis: [],
+          serial: 'USB 0x685D',
+          model: 'Samsung Galaxy (Modo Descarga)',
+          brand: 'Samsung',
+          isDualSim: false,
+          methodUsed: 'odin_mode',
+          regulatorLinks: REGULATOR_LINKS,
+          summary: 'Dispositivo en Modo Descarga / Odin. IMEI no disponible vía USB.'
+        }
+      });
+    }
     const imeis: Array<{ slot: number; imei: string; luhnValid: boolean; tac: string }> = [];
     let methodUsed = 'desconocido';
 
