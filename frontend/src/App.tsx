@@ -14,6 +14,7 @@ interface Device {
 interface DeviceInfo {
   model: string;
   manufacturer: string;
+  brand?: string;
   androidVersion: string;
   sdkLevel: string;
   cpuAbi: string;
@@ -832,6 +833,20 @@ function App() {
       const res = await axios.get(`${API_BASE}/device/${id}/info`);
       if (res.data.success) {
         setDeviceInfo(res.data.data);
+        const b = (
+          res.data.data?.brand ||
+          res.data.data?.manufacturer ||
+          res.data.data?.properties?.['ro.product.brand'] ||
+          res.data.data?.properties?.['ro.product.manufacturer'] ||
+          ''
+        ).toLowerCase();
+        if (b.includes('samsung') || id === 'SAMSUNG-ODIN-MODE' || id.includes('ODIN')) {
+          setSelectedBrand('samsung');
+        } else if (b.includes('xiaomi') || b.includes('redmi') || b.includes('poco')) {
+          setSelectedBrand('xiaomi');
+        } else if (b.includes('google') || b.includes('pixel')) {
+          setSelectedBrand('pixel');
+        }
         if (res.data.data.resolution && res.data.data.resolution !== 'Unknown') {
           setScreenResolution(res.data.data.resolution);
         }
@@ -1626,6 +1641,16 @@ function App() {
 
   const handleUnlockBootloader = async () => {
     if (!selectedDevice) return;
+    const isSamsung = selectedBrand === 'samsung' ||
+      selectedDevice === 'SAMSUNG-ODIN-MODE' ||
+      selectedDevice.includes('ODIN') ||
+      deviceInfo?.brand?.toLowerCase().includes('samsung') ||
+      deviceInfo?.manufacturer?.toLowerCase().includes('samsung');
+
+    if (isSamsung) {
+      return customAlert('Los dispositivos Samsung no utilizan Fastboot. El desbloqueo de bootloader en Samsung se realiza activando "Desbloqueo OEM" en Opciones de Desarrollador o desde la pantalla de Modo Descarga.');
+    }
+
     if (!await customConfirm('WARNING: Unlocking the bootloader will completely WIPE/FACTORY RESET the device. Are you sure?')) return;
     try {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/fastboot/unlock`);
@@ -1638,7 +1663,7 @@ function App() {
   const handleInstallMagisk = async () => {
     if (!selectedDevice) return;
     setIsInstallingMagisk(true);
-    addToast('Descargando e instalando Magisk... Esto puede tardar unos segundos.', 'info');
+    addToast('Descargando e instalando Magisk compatible... Esto puede tardar unos segundos.', 'info');
     try {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/fastboot/install-magisk`);
       if (res.data.success) {
@@ -1649,7 +1674,8 @@ function App() {
         logAction('Asistente Root', 'Instalar Magisk App', 'Error');
       }
     } catch (err: any) {
-      customAlert('Error de red al instalar Magisk', 'error');
+      const serverMsg = err.response?.data?.error || err.message || 'Error de red al instalar Magisk';
+      customAlert('Error al instalar Magisk: ' + serverMsg, 'error');
       logAction('Asistente Root', 'Instalar Magisk App', 'Falló');
     }
     setIsInstallingMagisk(false);
@@ -1657,7 +1683,15 @@ function App() {
 
   const handleAutoPatch = async () => {
     if (!selectedDevice || !autoPatchFile) return;
-    if (selectedBrand === 'samsung') return customAlert('Samsung requiere Odin. AutoPatch no funciona en Samsung.');
+    const isSamsung = selectedBrand === 'samsung' ||
+      selectedDevice === 'SAMSUNG-ODIN-MODE' ||
+      selectedDevice.includes('ODIN') ||
+      deviceInfo?.brand?.toLowerCase().includes('samsung') ||
+      deviceInfo?.manufacturer?.toLowerCase().includes('samsung');
+
+    if (isSamsung) {
+      return customAlert('Los dispositivos Samsung no soportan Fastboot ni AutoPatch directo. Para rootear tu Samsung, utiliza la aplicación Magisk ya instalada en tu dispositivo para parchear el boot.img, y flashea el archivo generado a través de la pestaña Samsung Odin (Heimdall).');
+    }
 
     const formData = new FormData();
     formData.append('file', autoPatchFile);
@@ -1679,8 +1713,9 @@ function App() {
         logAction('Asistente Root', 'AutoPatch Server', 'Error');
       }
     } catch (err: any) {
-      customAlert(err.response?.data?.error || err.message || 'Error de red en AutoPatch', 'error');
-      logAction('Asistente Root', 'AutoPatch Server', 'Falló');
+      const serverMsg = err.response?.data?.error || err.message || 'Error de red al procesar AutoPatch';
+      customAlert('Error en AutoPatch: ' + serverMsg, 'error');
+      logAction('Asistente Root', 'AutoPatch Server', 'Falló: ' + serverMsg);
     }
     setIsAutoPatching(false);
   };

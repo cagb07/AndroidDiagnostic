@@ -1120,6 +1120,12 @@ app.post('/api/device/:id/maintenance/:action', async (req, res) => {
 app.post('/api/device/:id/fastboot/unlock', async (req, res) => {
   try {
     const { id } = req.params;
+    if (isOdinDevice(id)) {
+      return res.status(400).json({
+        success: false,
+        error: 'El dispositivo está en Modo Descarga (Odin). Los comandos Fastboot no aplican a dispositivos Samsung en Modo Descarga.'
+      });
+    }
     exec(`${FASTBOOT_PATH} -s ${id} flashing unlock`, (err) => {
       if(err) exec(`${FASTBOOT_PATH} -s ${id} oem unlock`);
     });
@@ -1132,6 +1138,13 @@ app.post('/api/device/:id/fastboot/unlock', async (req, res) => {
 app.post('/api/device/:id/fastboot/flash', upload.single('file'), async (req, res) => {
   try {
     const { id } = req.params;
+    if (isOdinDevice(id)) {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(400).json({
+        success: false,
+        error: 'El dispositivo está en Modo Descarga (Odin). Para flashear particiones en Samsung, utiliza la pestaña Samsung Odin (Heimdall).'
+      });
+    }
     if (!req.file) {
       return res.status(400).json({ success: false, error: 'No file uploaded' });
     }
@@ -1201,6 +1214,14 @@ app.post('/api/device/:id/fastboot/autopatch', upload.single('file'), async (req
     const { id } = req.params;
     const partition = req.body.partition || 'boot'; // can be 'boot' or 'init_boot'
 
+    if (isOdinDevice(id)) {
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(400).json({
+        success: false,
+        error: 'El dispositivo está en Modo Descarga (Odin). AutoPatch requiere que el dispositivo esté encendido en Android normal con Depuración USB activa para parchear el kernel, o utiliza la pestaña Samsung Odin para flashear.'
+      });
+    }
+
     if (!req.file) {
       return res.status(400).json({ success: false, error: 'No boot.img uploaded' });
     }
@@ -1246,10 +1267,6 @@ app.post('/api/device/:id/fastboot/autopatch', upload.single('file'), async (req
       return res.status(400).json({ success: false, error: 'El archivo está corrupto o tiene un formato no válido. Debe ser una imagen de booteo (boot.img) válida.' });
     }
 
-    const magiskUrl = 'https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk';
-    const apkPath = '/tmp/Magisk-v27.0-AutoPatch.apk';
-    const extractPath = `/tmp/magisk_patch_${id}`;
-
     // 1. Check if device is in normal adb mode
     try {
       const { stdout: stateOut } = await execAsync(`${ADB_PATH} -s ${id} get-state`);
@@ -1257,8 +1274,30 @@ app.post('/api/device/:id/fastboot/autopatch', upload.single('file'), async (req
         throw new Error('Device not in device state');
       }
     } catch(e) {
-      throw new Error('El dispositivo debe estar encendido normalmente (con Depuración USB) para usar AutoPatch. No puede estar en modo Fastboot todavía.');
+      if (fs.existsSync(bootFilePath)) fs.unlinkSync(bootFilePath);
+      if (tempZipExtractPath && fs.existsSync(tempZipExtractPath)) fs.rmSync(tempZipExtractPath, { recursive: true, force: true });
+      return res.status(400).json({
+        success: false,
+        error: 'El dispositivo debe estar encendido normalmente (con Depuración USB) para usar AutoPatch. No puede estar en modo Fastboot ni en Modo Descarga todavía.'
+      });
     }
+
+    // Comprobar si el dispositivo es Samsung
+    try {
+      const { stdout: brandOut } = await execAsync(`${ADB_PATH} -s ${id} shell getprop ro.product.brand`);
+      if (brandOut.toLowerCase().includes('samsung')) {
+        if (fs.existsSync(bootFilePath)) fs.unlinkSync(bootFilePath);
+        if (tempZipExtractPath && fs.existsSync(tempZipExtractPath)) fs.rmSync(tempZipExtractPath, { recursive: true, force: true });
+        return res.status(400).json({
+          success: false,
+          error: 'Los dispositivos Samsung no utilizan Fastboot. Para rootear tu Samsung, utiliza la aplicación Magisk ya instalada en tu dispositivo o flashea el archivo boot/recovery parchado a través de la pestaña Samsung Odin (Heimdall).'
+        });
+      }
+    } catch(e) {}
+
+    const magiskUrl = 'https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk';
+    const apkPath = '/tmp/Magisk-v27.0-AutoPatch.apk';
+    const extractPath = `/tmp/magisk_patch_${id}`;
 
     // 2. Download Magisk if not exists
     if (!fs.existsSync(apkPath)) {
