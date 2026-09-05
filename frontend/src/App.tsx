@@ -399,7 +399,7 @@ function App() {
   };
 
   const fetchSecurityAudit = async () => {
-    if (!selectedDevice) return;
+    if (!selectedDevice || selectedDevice === 'SAMSUNG-ODIN-MODE' || selectedDevice.includes('ODIN') || selectedDevice.includes('DOWNLOAD')) return;
     setIsLoadingSecurityAudit(true);
     try {
       const res = await axios.get(`${API_BASE}/device/${selectedDevice}/security/audit`);
@@ -414,7 +414,7 @@ function App() {
   };
 
   const fetchImeiAndTelephony = async () => {
-    if (!selectedDevice) return;
+    if (!selectedDevice || selectedDevice === 'SAMSUNG-ODIN-MODE' || selectedDevice.includes('ODIN') || selectedDevice.includes('DOWNLOAD')) return;
     setIsLoadingImei(true);
     setIsLoadingTelephony(true);
     try {
@@ -847,6 +847,10 @@ function App() {
   };
 
   const fetchApps = async (id: string) => {
+    if (!id || id === 'SAMSUNG-ODIN-MODE' || id.includes('ODIN') || id.includes('DOWNLOAD')) {
+      setApps([]);
+      return;
+    }
     try {
       const res = await axios.get(`${API_BASE}/device/${id}/apps`);
       if (res.data.success) setApps(res.data.apps);
@@ -854,7 +858,7 @@ function App() {
   };
 
   const runMalwareScan = async () => {
-    if (!selectedDevice) return;
+    if (!selectedDevice || selectedDevice === 'SAMSUNG-ODIN-MODE' || selectedDevice.includes('ODIN') || selectedDevice.includes('DOWNLOAD')) return;
     setIsScanningMalware(true);
     setMalwareScanResults([]);
     try {
@@ -901,6 +905,10 @@ function App() {
   };
 
   const fetchSensors = async (id: string) => {
+    if (!id || id === 'SAMSUNG-ODIN-MODE' || id.includes('ODIN') || id.includes('DOWNLOAD')) {
+      setSensors([]);
+      return;
+    }
     try {
       const res = await axios.get(`${API_BASE}/device/${id}/sensors`);
       if (res.data.success) setSensors(res.data.sensors);
@@ -915,6 +923,9 @@ function App() {
   };
 
   const fetchAdvancedDiagnostics = async (id: string) => {
+    if (!id || id === 'SAMSUNG-ODIN-MODE' || id.includes('ODIN') || id.includes('DOWNLOAD')) {
+      return;
+    }
     try {
       const res = await axios.get(`${API_BASE}/device/${id}/diagnostics/advanced`);
       if (res.data.success) setAdvancedDiagnostics(res.data.data);
@@ -922,7 +933,7 @@ function App() {
   };
 
   const fetchThermalData = async () => {
-    if (!selectedDevice || activeTab !== 'thermal') return;
+    if (!selectedDevice || activeTab !== 'thermal' || selectedDevice === 'SAMSUNG-ODIN-MODE' || selectedDevice.includes('ODIN') || selectedDevice.includes('DOWNLOAD')) return;
     try {
       const res = await axios.get(`${API_BASE}/device/${selectedDevice}/thermal`);
       if (res.data.success) {
@@ -1350,6 +1361,9 @@ function App() {
   useEffect(() => {
     if (selectedDevice) {
       fetchDeviceInfo(selectedDevice);
+      if (selectedDevice === 'SAMSUNG-ODIN-MODE' || selectedDevice.includes('ODIN') || selectedDevice.includes('DOWNLOAD')) {
+        return;
+      }
       fetchBatteryInfo(selectedDevice);
       fetchApps(selectedDevice);
       fetchSensors(selectedDevice);

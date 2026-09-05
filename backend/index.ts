@@ -3054,6 +3054,18 @@ app.post('/api/device/:id/imei/trigger-dialer', async (req, res) => {
 app.get('/api/device/:id/telephony/diagnostics', async (req, res) => {
   try {
     const { id } = req.params;
+    if (isOdinDevice(id)) {
+      return res.json({
+        success: true,
+        data: {
+          serviceState: 'Desconocido (Modo Descarga)',
+          dataState: 'Desconectado',
+          networkOperator: 'N/A',
+          simState: 'N/A',
+          rejectCause: null
+        }
+      });
+    }
 
     // A. Consultar registro de telefonía
     const { stdout: telOut } = await execAsync(`${ADB_PATH} -s ${id} shell dumpsys telephony.registry 2>/dev/null || true`);
@@ -3425,14 +3437,17 @@ app.post('/api/odin/launch-app', async (req, res) => {
 
 function mapImageNameToPartition(filename: string): string | null {
   const base = filename.toLowerCase();
-  if (base.startsWith('boot.img')) return 'BOOT';
+  if (base.startsWith('boot.img')) return 'KERNEL';
   if (base.startsWith('recovery.img')) return 'RECOVERY';
   if (base.startsWith('system.img')) return 'SYSTEM';
   if (base.startsWith('vendor.img')) return 'VENDOR';
   if (base.startsWith('userdata.img')) return 'USERDATA';
-  if (base.startsWith('modem.bin') || base.startsWith('modem.img')) return 'RADIO';
-  if (base.startsWith('sboot.bin')) return 'BOOTLOADER';
-  if (base.startsWith('param.bin')) return 'PARAM';
+  if (base.startsWith('modem.bin') || base.startsWith('modem.img') || base.startsWith('sprdcp.img')) return 'MODEM';
+  if (base.startsWith('sprddsp.img')) return 'WDSP';
+  if (base.startsWith('sboot.bin')) return 'SBOOT';
+  if (base.startsWith('sboot2.bin')) return 'SBOOT2';
+  if (base.startsWith('spl.img')) return 'BOOT';
+  if (base.startsWith('param.bin') || base.startsWith('param.lfs')) return 'PARAM';
   if (base.startsWith('tz.mbn') || base.startsWith('tz.img')) return 'TZ';
   if (base.startsWith('vbmeta.img')) return 'VBMETA';
   if (base.startsWith('vbmeta_samsung.img')) return 'VBMETA_SAMSUNG';
@@ -3447,6 +3462,158 @@ function mapImageNameToPartition(filename: string): string | null {
   if (parts.length > 0 && parts[0].length >= 2) {
     return parts[0].toUpperCase();
   }
+  return null;
+}
+
+async function parsePitFile(pitPath: string): Promise<{ fileToPartition: Map<string, string>; pitPartitions: Set<string> }> {
+  const fileToPartition = new Map<string, string>();
+  const pitPartitions = new Set<string>();
+  try {
+    const { stdout } = await execAsync(`"${HEIMDALL_PATH}" print-pit --file "${pitPath}"`);
+    let currentPart = '';
+    for (const line of stdout.split('\n')) {
+      const t = line.trim();
+      if (t.startsWith('Partition Name:')) {
+        currentPart = t.replace('Partition Name:', '').trim();
+        if (currentPart) pitPartitions.add(currentPart);
+      } else if (t.startsWith('Flash Filename:')) {
+        const flash = t.replace('Flash Filename:', '').trim();
+        if (currentPart && flash) {
+          fileToPartition.set(flash.toLowerCase(), currentPart);
+          currentPart = '';
+        }
+      }
+    }
+  } catch (err: any) {
+    console.warn('[HEIMDALL] Error al analizar archivo PIT:', err.message);
+  }
+  return { fileToPartition, pitPartitions };
+}
+
+function resolvePartitionForImage(
+  filename: string,
+  pitMap: Map<string, string>,
+  pitPartitions: Set<string>
+): string | null {
+  const lower = filename.toLowerCase();
+
+  // 1. Coincidencia directa 1:1 con el Flash Filename definido en el archivo PIT
+  if (pitMap.has(lower)) {
+    return pitMap.get(lower)!;
+  }
+
+  // 2. Coincidencia directa con Partition Name en el PIT (sin extensión)
+  const baseNoExt = path.basename(filename, path.extname(filename));
+  for (const p of pitPartitions) {
+    if (p.toLowerCase() === baseNoExt.toLowerCase()) {
+      return p;
+    }
+  }
+
+  // 3. Mapeo inteligente de alias de Samsung contrastado con las particiones existentes en el PIT
+  const checkPitHas = (names: string[]): string | null => {
+    for (const n of names) {
+      for (const p of pitPartitions) {
+        if (p.toLowerCase() === n.toLowerCase()) return p;
+      }
+    }
+    return null;
+  };
+
+  if (lower.startsWith('boot.img')) {
+    const matched = checkPitHas(['KERNEL', 'BOOT']);
+    if (matched) return matched;
+  }
+  if (lower.startsWith('recovery.img')) {
+    const matched = checkPitHas(['RECOVERY']);
+    if (matched) return matched;
+  }
+  if (lower.startsWith('system.img')) {
+    const matched = checkPitHas(['SYSTEM']);
+    if (matched) return matched;
+  }
+  if (lower.startsWith('vendor.img')) {
+    const matched = checkPitHas(['VENDOR']);
+    if (matched) return matched;
+  }
+  if (lower.startsWith('userdata.img')) {
+    const matched = checkPitHas(['USERDATA', 'userdata']);
+    if (matched) return matched;
+  }
+  if (lower.startsWith('cache.img')) {
+    const matched = checkPitHas(['CACHE']);
+    if (matched) return matched;
+  }
+  if (lower.startsWith('hidden.img')) {
+    const matched = checkPitHas(['HIDDEN']);
+    if (matched) return matched;
+  }
+  if (lower.startsWith('sboot.bin') || lower.startsWith('sboot2.bin')) {
+    const matched = checkPitHas(['SBOOT', 'SBOOT2', 'BOOTLOADER', 'ABOOT']);
+    if (matched) return matched;
+  }
+  if (lower.startsWith('spl.img') || lower.startsWith('spl.bin')) {
+    const matched = checkPitHas(['BOOT', 'SPL']);
+    if (matched) return matched;
+  }
+  if (lower.startsWith('param.bin') || lower.startsWith('param.lfs')) {
+    const matched = checkPitHas(['PARAM']);
+    if (matched) return matched;
+  }
+  if (lower.startsWith('modem.bin') || lower.startsWith('modem.img') || lower.startsWith('sprdcp.img')) {
+    const matched = checkPitHas(['MODEM', 'RADIO']);
+    if (matched) return matched;
+  }
+  if (lower.startsWith('sprddsp.img') || lower.startsWith('dsp.img')) {
+    const matched = checkPitHas(['WDSP', 'DSP']);
+    if (matched) return matched;
+  }
+  if (lower.startsWith('nvitem.bin')) {
+    const matched = checkPitHas(['wfixnv2', 'wfixnv1', 'NVRAM']);
+    if (matched) return matched;
+  }
+  if (lower.startsWith('tz.mbn') || lower.startsWith('tz.img')) {
+    const matched = checkPitHas(['TZ']);
+    if (matched) return matched;
+  }
+  if (lower.startsWith('super.img')) {
+    const matched = checkPitHas(['SUPER']);
+    if (matched) return matched;
+  }
+  if (lower.startsWith('vbmeta.img')) {
+    const matched = checkPitHas(['VBMETA']);
+    if (matched) return matched;
+  }
+  if (lower.startsWith('vbmeta_samsung.img')) {
+    const matched = checkPitHas(['VBMETA_SAMSUNG']);
+    if (matched) return matched;
+  }
+  if (lower.startsWith('dtbo.img')) {
+    const matched = checkPitHas(['DTBO']);
+    if (matched) return matched;
+  }
+  if (lower.startsWith('prism.img')) {
+    const matched = checkPitHas(['PRISM']);
+    if (matched) return matched;
+  }
+  if (lower.startsWith('optics.img')) {
+    const matched = checkPitHas(['OPTICS']);
+    if (matched) return matched;
+  }
+  if (lower.startsWith('efs.img')) {
+    const matched = checkPitHas(['efs', 'EFS']);
+    if (matched) return matched;
+  }
+  if (lower.startsWith('sec_efs.img')) {
+    const matched = checkPitHas(['sec_efs', 'SEC_EFS']);
+    if (matched) return matched;
+  }
+
+  // 4. Fallback si no hay PIT disponible
+  if (pitPartitions.size === 0) {
+    return mapImageNameToPartition(filename);
+  }
+
   return null;
 }
 
@@ -3542,8 +3709,12 @@ async function executeHeimdallFlash(
     throw new Error('No se detectó el dispositivo en Modo Descarga. Conecta el cable en Modo Odin.');
   }
 
-  const extractedImages: { partition: string; filePath: string }[] = [];
+  // Priorizar paquete CSC primero ya que suele contener la tabla de particiones .PIT del firmware
+  const slotPriority: Record<string, number> = { csc: 1, bl: 2, cp: 3, ap: 4, userdata: 5 };
+  slotFiles.sort((a, b) => (slotPriority[a.slot] || 99) - (slotPriority[b.slot] || 99));
+
   let resolvedPitPath: string | null = customPitPath;
+  const rawExtractedFiles: { slot: string; filePath: string; itemName: string }[] = [];
 
   for (const item of slotFiles) {
     const slotName = item.slot.toUpperCase();
@@ -3552,49 +3723,109 @@ async function executeHeimdallFlash(
     const ext = path.extname(item.originalName).toLowerCase();
     if (ext === '.md5' || ext === '.tar' || item.originalName.endsWith('.tar.md5')) {
       const extractSubdir = path.join(sessionDir, item.slot);
-      fs.mkdirSync(extractSubdir, { recursive: true });
-      log(`Extrayendo archivo tar ${item.originalName}...`);
-      await execAsync(`tar -xf "${item.filePath}" -C "${extractSubdir}"`);
+      if (!fs.existsSync(extractSubdir)) {
+        fs.mkdirSync(extractSubdir, { recursive: true });
+      }
 
-      const extractedItems = fs.readdirSync(extractSubdir);
+      let extractedItems = fs.readdirSync(extractSubdir);
+      if (extractedItems.length === 0) {
+        log(`Extrayendo archivo tar ${item.originalName}...`);
+        await execAsync(`tar -xf "${item.filePath}" -C "${extractSubdir}"`);
+        extractedItems = fs.readdirSync(extractSubdir);
+      } else {
+        log(`Paquete ${slotName} ya se encuentra extraído en sesión, reutilizando archivos.`);
+      }
+
       for (const extractedItem of extractedItems) {
         let itemPath = path.join(extractSubdir, extractedItem);
         let itemName = extractedItem;
 
         if (extractedItem.endsWith('.lz4')) {
           const decompressed = itemPath.slice(0, -4);
-          log(`Descomprimiendo LZ4: ${extractedItem} -> ${path.basename(decompressed)}`);
-          await execAsync(`lz4 -d -f "${itemPath}" "${decompressed}"`);
+          if (!fs.existsSync(decompressed)) {
+            log(`Descomprimiendo LZ4: ${extractedItem} -> ${path.basename(decompressed)}`);
+            await execAsync(`lz4 -d -f "${itemPath}" "${decompressed}"`);
+          }
           itemPath = decompressed;
           itemName = path.basename(decompressed);
         }
 
-        if (itemName.endsWith('.pit') && !resolvedPitPath) {
+        if (itemName.toLowerCase().endsWith('.pit') && !resolvedPitPath) {
           resolvedPitPath = itemPath;
-          log(`PIT detectado dentro del firmware: ${itemName}`);
+          log(`PIT detectado dentro del paquete ${slotName}: ${itemName}`);
           continue;
         }
 
-        const partName = mapImageNameToPartition(itemName);
-        if (partName) {
-          extractedImages.push({ partition: partName, filePath: itemPath });
-          log(`Mapeado: ${itemName} -> Partición [${partName}]`);
-        }
+        rawExtractedFiles.push({ slot: item.slot, filePath: itemPath, itemName });
       }
     } else {
       let itemPath = item.filePath;
       let itemName = item.originalName;
       if (itemName.endsWith('.lz4')) {
         const decompressed = path.join(sessionDir, itemName.slice(0, -4));
-        await execAsync(`lz4 -d -f "${itemPath}" "${decompressed}"`);
+        if (!fs.existsSync(decompressed)) {
+          await execAsync(`lz4 -d -f "${itemPath}" "${decompressed}"`);
+        }
         itemPath = decompressed;
         itemName = path.basename(decompressed);
       }
-      const partName = mapImageNameToPartition(itemName);
-      if (partName) {
-        extractedImages.push({ partition: partName, filePath: itemPath });
-        log(`Mapeado archivo directo: ${itemName} -> [${partName}]`);
+      if (itemName.toLowerCase().endsWith('.pit') && !resolvedPitPath) {
+        resolvedPitPath = itemPath;
+        log(`PIT detectado: ${itemName}`);
+      } else {
+        rawExtractedFiles.push({ slot: item.slot, filePath: itemPath, itemName });
       }
+    }
+  }
+
+  // Si no se encontró archivo PIT en los paquetes, buscar en todo el árbol de la sesión
+  if (!resolvedPitPath) {
+    const allSession = findFilesRecursively(sessionDir);
+    for (const f of allSession) {
+      if (f.toLowerCase().endsWith('.pit')) {
+        resolvedPitPath = f;
+        log(`PIT localizado en directorio de sesión: ${path.basename(f)}`);
+        break;
+      }
+    }
+  }
+
+  // Analizar la tabla PIT para mapear con precisión quirúrgica cada archivo a su partición correspondiente
+  let fileToPartition = new Map<string, string>();
+  let pitPartitions = new Set<string>();
+
+  if (resolvedPitPath) {
+    log(`Analizando tabla de particiones PIT (${path.basename(resolvedPitPath)})...`);
+    const parsed = await parsePitFile(resolvedPitPath);
+    fileToPartition = parsed.fileToPartition;
+    pitPartitions = parsed.pitPartitions;
+    log(`PIT analizado exitosamente: ${pitPartitions.size} particiones registradas.`);
+  } else {
+    try {
+      const dumpPitPath = path.join(sessionDir, 'live_device.pit');
+      log('Intentando descargar tabla PIT en vivo desde el dispositivo...');
+      await execAsync(`"${HEIMDALL_PATH}" download-pit --output "${dumpPitPath}" --no-reboot --resume`);
+      if (fs.existsSync(dumpPitPath) && fs.statSync(dumpPitPath).size > 0) {
+        resolvedPitPath = dumpPitPath;
+        const parsed = await parsePitFile(dumpPitPath);
+        fileToPartition = parsed.fileToPartition;
+        pitPartitions = parsed.pitPartitions;
+        log(`PIT descargado y analizado exitosamente desde el dispositivo (${pitPartitions.size} particiones).`);
+      }
+    } catch (dumpErr: any) {
+      log('No se pudo descargar PIT en vivo; se utilizarán alias estándar de particiones.');
+    }
+  }
+
+  const extractedImages: { partition: string; filePath: string }[] = [];
+  for (const f of rawExtractedFiles) {
+    if (f.itemName.toLowerCase().endsWith('.pit')) continue;
+    const partName = resolvePartitionForImage(f.itemName, fileToPartition, pitPartitions);
+    if (partName) {
+      extractedImages.push({ partition: partName, filePath: f.filePath });
+      log(`Mapeado verificado: ${f.itemName} -> Partición [${partName}]`);
+    } else {
+      log(`Archivo informativo / no particionable omitido: ${f.itemName}`);
     }
   }
 
@@ -3623,10 +3854,30 @@ async function executeHeimdallFlash(
     flashCmd += ` --${partition} "${imgPath}"`;
   }
 
-  log(`Ejecutando Heimdall con ${partitionMap.size} particiones...`);
-  const { stdout, stderr } = await execAsync(flashCmd);
-  log('Flasheo completado con éxito.');
-  return stdout + '\n' + stderr;
+  log(`Ejecutando Heimdall con ${partitionMap.size} particiones asignadas...`);
+  try {
+    const { stdout, stderr } = await execAsync(flashCmd, { maxBuffer: 50 * 1024 * 1024 });
+    log('Flasheo completado con éxito.');
+    return (stdout || '') + '\n' + (stderr || '');
+  } catch (err: any) {
+    const combined = ((err.stdout || '') + '\n' + (err.stderr || '') + '\n' + (err.message || '')).toLowerCase();
+    if (combined.includes('protocol initialisation failed') || combined.includes('failed to receive handshake') || combined.includes('result: -7')) {
+      throw new Error(
+        'Fallo de comunicación USB con el bootloader de Samsung (Handshake Timeout / Result: -7).\n\n' +
+        'El teléfono quedó en una sesión USB previa o en pausa. Para que Heimdall pueda iniciar la transferencia:\n' +
+        '1. Desconecta el cable USB del teléfono.\n' +
+        '2. Reinicia el dispositivo en Modo Descarga: mantén presionados al mismo tiempo los botones [Bajar Volumen + Home + Encendido] por 7 segundos hasta que la pantalla se apague.\n' +
+        '3. En la pantalla de advertencia con letras celestes, presiona [Subir Volumen] para entrar a "Downloading...".\n' +
+        '4. Conecta de nuevo el cable USB a la Mac y pulsa "Flashear" (los archivos ya están preparados y el flasheo iniciará inmediatamente).'
+      );
+    }
+    if (combined.includes('does not exist in the specified pit') || combined.includes('failed to confirm partition name')) {
+      throw new Error(
+        'Discrepancia de particiones con la tabla PIT del dispositivo: ' + (err.stderr || err.message)
+      );
+    }
+    throw new Error(`Error durante la ejecución de Heimdall: ${err.message}\n${err.stderr || ''}`);
+  }
 }
 
 // 1. Carga, descompresión y verificación de compatibilidad de Firmware ZIP
@@ -3849,11 +4100,12 @@ app.post('/api/odin/flash-extracted-session', async (req, res) => {
     for (const fPath of allFiles) {
       const bName = path.basename(fPath);
       const upper = bName.toUpperCase();
-      if (upper.startsWith('BL_')) blPath = fPath;
-      else if (upper.startsWith('AP_')) apPath = fPath;
-      else if (upper.startsWith('CP_')) cpPath = fPath;
-      else if (upper.startsWith('HOME_CSC_')) homeCscPath = fPath;
-      else if (upper.startsWith('CSC_')) cscPath = fPath;
+      const isTar = upper.endsWith('.TAR.MD5') || upper.endsWith('.TAR');
+      if (upper.startsWith('BL_') && isTar) blPath = fPath;
+      else if (upper.startsWith('AP_') && isTar) apPath = fPath;
+      else if (upper.startsWith('CP_') && isTar) cpPath = fPath;
+      else if (upper.startsWith('HOME_CSC_') && isTar) homeCscPath = fPath;
+      else if (upper.startsWith('CSC_') && isTar) cscPath = fPath;
       else if (upper.endsWith('.PIT')) customPitPath = fPath;
     }
 
@@ -3888,7 +4140,7 @@ app.post('/api/odin/flash-extracted-session', async (req, res) => {
 
   } catch (err: any) {
     log(`ERROR: ${err.message}`);
-    try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch {}
+    // No eliminamos sessionDir para permitir que el usuario pueda reintentar inmediatamente si reinicia en Modo Descarga
     res.status(500).json({
       success: false,
       error: err.message,
@@ -3958,7 +4210,6 @@ app.post('/api/odin/flash', upload.fields([
 
   } catch (err: any) {
     log(`ERROR: ${err.message}`);
-    try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch {}
     res.status(500).json({
       success: false,
       error: err.message,
