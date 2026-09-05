@@ -1160,19 +1160,37 @@ app.post('/api/device/:id/fastboot/install-magisk', async (req, res) => {
   try {
     const { id } = req.params;
     
-    const url = 'https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk';
-    const apkPath = path.join('/tmp', `Magisk_Direct_${Date.now()}.apk`);
+    // Obtener la versión de SDK del dispositivo para seleccionar una versión de Magisk compatible
+    let sdkVersion = 23;
+    try {
+      const { stdout: sdkOut } = await execAsync(`${ADB_PATH} -s ${id} shell getprop ro.build.version.sdk`);
+      const parsedSdk = parseInt(sdkOut.trim(), 10);
+      if (!isNaN(parsedSdk)) sdkVersion = parsedSdk;
+    } catch {}
+
+    // Magisk v27.0 requiere SDK >= 23 (Android 6.0+). Para Android 5.0 / 5.1 (SDK 21/22), la última versión compatible es v22.1.
+    const magiskVer = sdkVersion < 23 ? 'v22.1' : 'v27.0';
+    const url = sdkVersion < 23
+      ? 'https://github.com/topjohnwu/Magisk/releases/download/v22.1/Magisk-v22.1.apk'
+      : 'https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk';
+
+    const apkPath = path.join('/tmp', `Magisk_${magiskVer}_${Date.now()}.apk`);
     
     // Usamos curl para manejar redirecciones de GitHub fácilmente
     await execAsync(`curl -L -o "${apkPath}" "${url}"`);
     
     // Instalar en el dispositivo
-    await execAsync(`${ADB_PATH} -s ${id} install -r "${apkPath}"`);
+    const { stdout: installOut, stderr: installErr } = await execAsync(`${ADB_PATH} -s ${id} install -r "${apkPath}"`);
+    const combinedOutput = (installOut || '') + ' ' + (installErr || '');
     
     // Limpiar
     if (fs.existsSync(apkPath)) fs.unlinkSync(apkPath);
     
-    res.json({ success: true, message: 'App de Magisk instalada correctamente en el teléfono.' });
+    if (combinedOutput.includes('Failure')) {
+      throw new Error(`Fallo en adb install: ${combinedOutput.trim()}`);
+    }
+    
+    res.json({ success: true, message: `App de Magisk (${magiskVer}) instalada correctamente en el teléfono.` });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
