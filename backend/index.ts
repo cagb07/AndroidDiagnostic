@@ -3476,15 +3476,27 @@ app.get('/api/odin/detect', async (req, res) => {
 
 // Reboot connected ADB device to Samsung Download Mode
 app.post('/api/odin/reboot-download', async (req, res) => {
-  const { id } = req.body;
+  let { id } = req.body;
   if (!id) {
-    return res.status(400).json({ success: false, error: 'Se requiere ID de dispositivo' });
+    try {
+      const devList = await client.listDevices();
+      if (devList && devList.length > 0) {
+        id = devList[0].id;
+      }
+    } catch {}
+  }
+  if (!id) {
+    return res.status(400).json({ success: false, error: 'No se encontró ningún dispositivo Android conectado por USB para reiniciar.' });
   }
   try {
     try {
       await execAsync(`"${ADB_PATH}" -s ${id} reboot download`);
     } catch (err1) {
-      await execAsync(`"${ADB_PATH}" -s ${id} reboot bootloader`);
+      try {
+        await execAsync(`"${ADB_PATH}" -s ${id} reboot bootloader`);
+      } catch (err2) {
+        await execAsync(`"${ADB_PATH}" -s ${id} shell reboot download`);
+      }
     }
     res.json({
       success: true,
@@ -3871,7 +3883,10 @@ async function executeHeimdallFlash(
     }
     log('Dispositivo Samsung en Modo Descarga detectado.');
   } catch (e: any) {
-    throw new Error('No se detectó el dispositivo Samsung en Modo Descarga (Odin Mode). Para flashear con Heimdall, el teléfono debe mostrar la pantalla verde/azul "Downloading... Do not turn off target". Ponlo manualmente en Modo Descarga: Apaga el teléfono, mantén pulsados [Volumen Abajo + Home + Encendido] y luego pulsa [Volumen Arriba].');
+    const diag = await getHeimdallDiagnosticError(e);
+    const err = new Error(diag.error || 'No se detectó el dispositivo Samsung en Modo Descarga (Odin Mode). Para flashear con Heimdall, el teléfono debe mostrar la pantalla verde/azul "Downloading... Do not turn off target". Ponlo manualmente en Modo Descarga: Apaga el teléfono, mantén pulsados [Volumen Abajo + Home + Encendido] y luego pulsa [Volumen Arriba].');
+    (err as any).notInDownloadMode = diag.notInDownloadMode || true;
+    throw err;
   }
 
   // Priorizar paquete CSC primero ya que suele contener la tabla de particiones .PIT del firmware
@@ -4305,9 +4320,13 @@ app.post('/api/odin/flash-extracted-session', async (req, res) => {
 
   } catch (err: any) {
     log(`ERROR: ${err.message}`);
-    // No eliminamos sessionDir para permitir que el usuario pueda reintentar inmediatamente si reinicia en Modo Descarga
-    res.status(500).json({
+    const notInDownload = err.notInDownloadMode || 
+                          err.message.toLowerCase().includes('modo descarga') || 
+                          err.message.toLowerCase().includes('download-mode') ||
+                          err.message.toLowerCase().includes('failed to detect');
+    res.status(notInDownload ? 400 : 500).json({
       success: false,
+      notInDownloadMode: notInDownload,
       error: err.message,
       logs: logs.join('\n') + '\n' + (err.stdout || '') + '\n' + (err.stderr || '')
     });
@@ -4375,8 +4394,13 @@ app.post('/api/odin/flash', upload.fields([
 
   } catch (err: any) {
     log(`ERROR: ${err.message}`);
-    res.status(500).json({
+    const notInDownload = err.notInDownloadMode || 
+                          err.message.toLowerCase().includes('modo descarga') || 
+                          err.message.toLowerCase().includes('download-mode') ||
+                          err.message.toLowerCase().includes('failed to detect');
+    res.status(notInDownload ? 400 : 500).json({
       success: false,
+      notInDownloadMode: notInDownload,
       error: err.message,
       logs: logs.join('\n') + '\n' + (err.stdout || '') + '\n' + (err.stderr || '')
     });

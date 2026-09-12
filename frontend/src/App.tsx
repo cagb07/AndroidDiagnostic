@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
-import { Smartphone, Battery, Info, Activity, RefreshCw, Power, Zap, PlaySquare, LayoutGrid, Trash2, TerminalSquare, Play, Square, HardDriveDownload, ShieldAlert, Unlock, UploadCloud, AlertCircle, Volume2, Sun, Moon, PowerOff, ShieldQuestion, Camera, MonitorPlay, Lock, Wrench, Cpu, Database, Wifi, Thermometer, MemoryStick, ServerCrash, Box, Upload, Terminal, FolderOpen, EyeOff, Eye, X, Maximize, LayoutDashboard, Globe, Radar, Bug, Flame, ChevronLeft, Circle, Film, FileText, Printer, Copy, Keyboard, Clipboard, CheckCircle2, AlertTriangle, XCircle, ShieldCheck, Radio, Signal, ExternalLink, Search, Hash } from 'lucide-react';
+import { Smartphone, Battery, Info, Activity, RefreshCw, Power, Zap, PlaySquare, LayoutGrid, Trash2, TerminalSquare, Play, Square, HardDriveDownload, ShieldAlert, Unlock, UploadCloud, AlertCircle, Volume2, Sun, Moon, PowerOff, ShieldQuestion, Camera, MonitorPlay, Lock, Wrench, Cpu, Database, Wifi, Thermometer, MemoryStick, ServerCrash, Box, Upload, Terminal, FolderOpen, EyeOff, Eye, X, Maximize, LayoutDashboard, Globe, Radar, Bug, Flame, ChevronLeft, Circle, Film, FileText, Printer, Copy, Keyboard, Clipboard, CheckCircle2, AlertTriangle, XCircle, ShieldCheck, Radio, Signal, ExternalLink, Search, Hash, Download, Layers, Sparkles, BookOpen } from 'lucide-react';
 
 const API_BASE = 'http://localhost:3001/api';
 
@@ -126,9 +126,12 @@ function App() {
   // PRO V3 States
   const [thermalData, setThermalData] = useState<any[]>([]);
 
-  // Root States
+  // Root & ROM States
   const [isInstallingMagisk, setIsInstallingMagisk] = useState(false);
-  const [rootMode, setRootMode] = useState<'auto' | 'manual'>('auto');
+  const [rootMode, setRootMode] = useState<'auto' | 'manual' | 'roms' | 'root_systems' | 'recoveries'>('auto');
+  const [romSearchQuery, setRomSearchQuery] = useState('');
+  const [selectedRomCategory, setSelectedRomCategory] = useState<'all' | 'custom' | 'gsi' | 'stock'>('all');
+  const [manualDeviceSearch, setManualDeviceSearch] = useState('');
   const [autoPatchFile, setAutoPatchFile] = useState<File | null>(null);
   const [isAutoPatching, setIsAutoPatching] = useState(false);
   const [autoPatchPartition, setAutoPatchPartition] = useState<'boot' | 'init_boot'>('boot');
@@ -432,8 +435,10 @@ function App() {
     }
   };
 
-  const fetchImeiAndTelephony = async () => {
+  const fetchImeiAndTelephony = async (forceParam?: boolean | any) => {
+    const force = typeof forceParam === 'boolean' ? forceParam : false;
     if (!selectedDevice || selectedDevice === 'SAMSUNG-ODIN-MODE' || selectedDevice.includes('ODIN') || selectedDevice.includes('DOWNLOAD')) return;
+    if (!force && imeiData && imeiData.model && !isLoadingImei) return; // Reutilizar datos ya extraídos
     setIsLoadingImei(true);
     setIsLoadingTelephony(true);
     try {
@@ -540,20 +545,23 @@ function App() {
   };
 
   const handleOdinRebootDownload = async () => {
-    if (!selectedDevice) {
-      addToast('Selecciona un dispositivo conectado por USB primero', 'error');
+    const targetId = selectedDevice || (devices.length > 0 ? devices[0].id : null);
+    if (!targetId) {
+      addToast('Conecta un dispositivo Android por USB primero para reiniciar', 'error');
       return;
     }
     setIsOdinRebooting(true);
     try {
-      const res = await axios.post(`${API_BASE}/odin/reboot-download`, { id: selectedDevice });
+      const res = await axios.post(`${API_BASE}/odin/reboot-download`, { id: targetId });
       if (res.data.success) {
         addToast(res.data.message, 'success');
-        setOdinLogs(prev => prev + `\n[${new Date().toLocaleTimeString()}] Reiniciando ${selectedDevice} en Modo Descarga...`);
+        setOdinLogs(prev => prev + `\n[${new Date().toLocaleTimeString()}] Reiniciando ${targetId} en Modo Descarga...`);
         setTimeout(() => handleOdinDetect(), 4000);
       }
     } catch (e: any) {
-      addToast(e.response?.data?.error || e.message, 'error');
+      const errMsg = e.response?.data?.error || e.message;
+      addToast(errMsg, 'error');
+      setOdinLogs(prev => prev + `\n[ERROR REINICIO DOWNLOAD] ${errMsg}`);
     } finally {
       setIsOdinRebooting(false);
     }
@@ -561,8 +569,12 @@ function App() {
 
   const handleOdinPrintPit = async () => {
     if (!odinDeviceDetected) {
-      if (selectedDevice) {
-        if (window.confirm(`El dispositivo Samsung (${selectedDevice}) está encendido en modo Android normal (ADB).\n\nPara leer la tabla de particiones PIT, el teléfono debe estar en 'Modo Descarga' (Download Mode / Odin Mode).\n\n¿Deseas reiniciarlo ahora a Modo Descarga?`)) {
+      const targetId = selectedDevice || (devices.length > 0 ? devices[0].id : null);
+      if (targetId) {
+        const shouldReboot = await customConfirm(
+          `El dispositivo Samsung (${targetId}) está encendido en modo Android normal (ADB).\n\nPara leer la tabla de particiones PIT, el teléfono debe estar en 'Modo Descarga' (Download Mode / Odin Mode).\n\n¿Deseas reiniciarlo ahora a Modo Descarga?`
+        );
+        if (shouldReboot) {
           handleOdinRebootDownload();
         }
         return;
@@ -591,8 +603,12 @@ function App() {
 
   const handleOdinDownloadPit = async () => {
     if (!odinDeviceDetected) {
-      if (selectedDevice) {
-        if (window.confirm(`El dispositivo Samsung (${selectedDevice}) está encendido en modo Android normal (ADB).\n\nPara descargar la tabla de particiones PIT, el teléfono debe estar en 'Modo Descarga' (Download Mode / Odin Mode).\n\n¿Deseas reiniciarlo ahora a Modo Descarga?`)) {
+      const targetId = selectedDevice || (devices.length > 0 ? devices[0].id : null);
+      if (targetId) {
+        const shouldReboot = await customConfirm(
+          `El dispositivo Samsung (${targetId}) está encendido en modo Android normal (ADB).\n\nPara descargar la tabla de particiones PIT, el teléfono debe estar en 'Modo Descarga' (Download Mode / Odin Mode).\n\n¿Deseas reiniciarlo ahora a Modo Descarga?`
+        );
+        if (shouldReboot) {
           handleOdinRebootDownload();
         }
         return;
@@ -759,6 +775,20 @@ function App() {
       if (!proceed) return;
     }
 
+    // 1. Verificación previa de Modo Descarga en el dispositivo
+    if (odinDeviceDetected !== true) {
+      const targetId = selectedDevice || (devices.length > 0 ? devices[0].id : null);
+      const devName = deviceInfo?.model || targetId || 'Samsung';
+      const shouldReboot = await customConfirm(
+        `DISPOSITIVO NO ESTÁ EN MODO DESCARGA\n\nEl teléfono ${devName} no ha sido detectado en Modo Descarga (Odin Mode).\n\nPara que Heimdall / Odin puedan flashear el firmware, el teléfono DEBE estar en la pantalla con el texto "Downloading... Do not turn off target".\n\n¿Deseas que la aplicación intente reiniciar el dispositivo automáticamente a Modo Descarga ahora?`
+      );
+      if (shouldReboot) {
+        await handleOdinRebootDownload();
+        addToast('Reiniciando teléfono en Modo Descarga. Cuando el teléfono muestre la pantalla "Downloading", pulsa nuevamente en Flashear.', 'info');
+      }
+      return;
+    }
+
     setIsFlashingExtracted(true);
     setOdinLogs(prev => prev + `\n\n===============================\n[${new Date().toLocaleTimeString()}] INICIANDO FLASHEO DE FIRMWARE VERIFICADO (MODO CSC: ${chosenCscChoice === 'home' ? 'HOME_CSC (Sin borrar datos)' : 'CSC (Formateo limpio)'})...\n===============================`);
     addToast('Iniciando flasheo de firmware con Heimdall...', 'info');
@@ -783,7 +813,18 @@ function App() {
     } catch (e: any) {
       const errMsg = e.response?.data?.error || e.message;
       const errLogs = e.response?.data?.logs || '';
-      addToast(`Error al flashear: ${errMsg}`, 'error');
+      const notInDownload = e.response?.data?.notInDownloadMode || errMsg.toLowerCase().includes('modo descarga');
+
+      if (notInDownload) {
+        const shouldReboot = await customConfirm(
+          `DISPOSITIVO NO ESTÁ EN MODO DESCARGA\n\n${errMsg}\n\n¿Deseas que la aplicación intente reiniciar el teléfono automáticamente a Modo Descarga ahora?`
+        );
+        if (shouldReboot) {
+          await handleOdinRebootDownload();
+        }
+      } else {
+        addToast(`Error al flashear: ${errMsg}`, 'error');
+      }
       setOdinLogs(prev => prev + `\n[ERROR FLASHEO] ${errMsg}\n` + errLogs);
     } finally {
       setIsFlashingExtracted(false);
@@ -1496,14 +1537,19 @@ function App() {
   useEffect(() => {
     if (selectedDevice) {
       const devObj = devices.find(d => d.id === selectedDevice);
-      const isUnauth = devObj?.type === 'unauthorized' || deviceAuthError === 'unauthorized';
-      const isOff = devObj?.type === 'offline' || deviceAuthError === 'offline';
+      if (!devObj) {
+        // Dispositivo no conectado físicamente o reiniciándose
+        return;
+      }
 
-      if (devObj?.type === 'unauthorized') {
+      const isUnauth = devObj.type === 'unauthorized' || deviceAuthError === 'unauthorized';
+      const isOff = devObj.type === 'offline' || deviceAuthError === 'offline';
+
+      if (devObj.type === 'unauthorized') {
         setDeviceAuthError('unauthorized');
-      } else if (devObj?.type === 'offline') {
+      } else if (devObj.type === 'offline') {
         setDeviceAuthError('offline');
-      } else if (devObj?.type === 'device') {
+      } else if (devObj.type === 'device') {
         setDeviceAuthError(null);
       }
 
@@ -1514,23 +1560,26 @@ function App() {
       const isNonStandardMode = selectedDevice === 'SAMSUNG-ODIN-MODE' ||
                                 selectedDevice.includes('ODIN') ||
                                 selectedDevice.includes('DOWNLOAD') ||
-                                devObj?.type === 'download' ||
-                                devObj?.type === 'fastboot' ||
-                                devObj?.type === 'sideload' ||
-                                devObj?.type === 'recovery';
+                                devObj.type === 'download' ||
+                                devObj.type === 'fastboot' ||
+                                devObj.type === 'sideload' ||
+                                devObj.type === 'recovery';
 
       fetchDeviceInfo(selectedDevice);
-      if (isNonStandardMode) {
+      if (isNonStandardMode || activeTab === 'odin') {
         return;
       }
+
       fetchBatteryInfo(selectedDevice);
       fetchApps(selectedDevice);
       fetchSensors(selectedDevice);
       fetchAdvancedDiagnostics(selectedDevice);
-      fetchSecurityAudit();
-      fetchImeiAndTelephony();
+      if (activeTab === 'security') {
+        fetchSecurityAudit();
+        fetchImeiAndTelephony();
+      }
     }
-  }, [selectedDevice, devices]);
+  }, [selectedDevice, devices, activeTab]);
 
   // App Info loader
   useEffect(() => {
@@ -3347,14 +3396,26 @@ function App() {
                               <h3 className="text-2xl font-bold text-slate-100">Asistente Root y Flasheo</h3>
                             </div>
 
-                            <div className="flex bg-slate-800/80 p-1.5 rounded-xl mb-8 w-max border border-slate-700 shadow-inner">
-                              <button onClick={() => setRootMode('auto')} className={`px-6 py-2.5 rounded-lg font-bold text-sm transition-all flex items-center space-x-2 ${rootMode === 'auto' ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'}`}>
+                            <div className="flex flex-wrap bg-slate-800/80 p-1.5 rounded-2xl mb-8 gap-2 border border-slate-700 shadow-inner">
+                              <button onClick={() => setRootMode('auto')} className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center space-x-2 ${rootMode === 'auto' ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'}`}>
                                 <Zap className="w-4 h-4" />
-                                <span>AutoPatch (Recomendado)</span>
+                                <span>AutoPatch</span>
                               </button>
-                              <button onClick={() => setRootMode('manual')} className={`px-6 py-2.5 rounded-lg font-bold text-sm transition-all flex items-center space-x-2 ${rootMode === 'manual' ? 'bg-gradient-to-r from-orange-600 to-red-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'}`}>
+                              <button onClick={() => setRootMode('manual')} className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center space-x-2 ${rootMode === 'manual' ? 'bg-gradient-to-r from-orange-600 to-red-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'}`}>
                                 <Wrench className="w-4 h-4" />
-                                <span>Modo Manual</span>
+                                <span>Flasheo Manual</span>
+                              </button>
+                              <button onClick={() => setRootMode('roms')} className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center space-x-2 ${rootMode === 'roms' ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'}`}>
+                                <Globe className="w-4 h-4" />
+                                <span>Sistemas Operativos (ROMs)</span>
+                              </button>
+                              <button onClick={() => setRootMode('root_systems')} className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center space-x-2 ${rootMode === 'root_systems' ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'}`}>
+                                <ShieldCheck className="w-4 h-4" />
+                                <span>Sistemas de Ruteo</span>
+                              </button>
+                              <button onClick={() => setRootMode('recoveries')} className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center space-x-2 ${rootMode === 'recoveries' ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'}`}>
+                                <Layers className="w-4 h-4" />
+                                <span>Custom Recoveries</span>
                               </button>
                             </div>
 
@@ -3532,6 +3593,826 @@ function App() {
                                 </div>
                               </>
                             )}
+
+                            {/* SISTEMAS OPERATIVOS & CUSTOM ROMS */}
+                            {rootMode === 'roms' && (() => {
+                              const targetBrand = (deviceInfo?.brand || deviceInfo?.manufacturer || selectedBrand || '').toLowerCase();
+                              const targetModel = deviceInfo?.model || manualDeviceSearch || '';
+                              const targetBoard = deviceInfo?.board || '';
+
+                              const customRoms = [
+                                {
+                                  id: 'lineageos',
+                                  name: 'LineageOS',
+                                  category: 'custom',
+                                  badge: 'AOSP Puro / Máxima Estabilidad',
+                                  badgeColor: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
+                                  description: 'El sistema operativo libre más longevo y confiable del ecosistema Android. Basado en AOSP con actualizaciones semanales/mensuales, parches de seguridad rápidos y la suite Privacy Guard / Trust sin software espía ni bloatware.',
+                                  pros: ['Soporte para cientos de dispositivos', 'Parches de seguridad mensuales garantizados', 'Consumo de batería mínimo y alta estabilidad'],
+                                  requirements: 'Bootloader desbloqueado + Recovery compatible (TWRP o Lineage Recovery)',
+                                  officialUrl: 'https://download.lineageos.org/',
+                                  deviceSearchUrl: targetModel ? `https://download.lineageos.org/devices/${encodeURIComponent((targetBoard || targetModel).toLowerCase())}` : 'https://download.lineageos.org/'
+                                },
+                                {
+                                  id: 'pixelos',
+                                  name: 'PixelOS / Pixel Experience',
+                                  category: 'custom',
+                                  badge: 'Google Pixel UI / GApps Nativas',
+                                  badgeColor: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+                                  description: 'Transforma tu teléfono en un Google Pixel de fábrica. Incluye la interfaz Material You completa, Google Camera (GCam) optimizada, Pixel Launcher, fondos dinámicos y compatibilidad nativa con SafetyNet/Play Integrity.',
+                                  pros: ['Servicios de Google (GApps) preinstalados', 'Experiencia visual Pixel idéntica', 'Animaciones a 90Hz/120Hz súper fluidas'],
+                                  requirements: 'Bootloader desbloqueado + Clean Wipe en Recovery',
+                                  officialUrl: 'https://pixelos.net/',
+                                  deviceSearchUrl: 'https://pixelos.net/download'
+                                },
+                                {
+                                  id: 'crdroid',
+                                  name: 'crDroid Android',
+                                  category: 'custom',
+                                  badge: 'Personalización Extrema / Gaming',
+                                  badgeColor: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
+                                  description: 'Basada en LineageOS pero orientada a exprimir hasta el último hercio de tu pantalla y ciclo de tu procesador. Incluye el famoso menú "crDroid Settings" para configurar cada detalle de la interfaz, CPU, GPU y audio.',
+                                  pros: ['Miles de ajustes visuales y de rendimiento', 'Modo Juego avanzado y control de tasa de refresco', 'Excelente duración de batería con Doze agresivo'],
+                                  requirements: 'Bootloader desbloqueado + Firmware actualizado',
+                                  officialUrl: 'https://crdroid.net/',
+                                  deviceSearchUrl: 'https://crdroid.net/downloads'
+                                },
+                                {
+                                  id: 'e-os',
+                                  name: '/e/OS (Murena)',
+                                  category: 'custom',
+                                  badge: '100% Desgooglizado / Privacidad Total',
+                                  badgeColor: 'bg-teal-500/20 text-teal-400 border-teal-500/30',
+                                  description: 'Sistema operativo libre desarrollado por la Fundación /e/. Elimina por completo las llamadas a servidores de Google reemplazándolas con microG de código abierto, bloqueador de rastreadores incorporado y almacenamiento encriptado.',
+                                  pros: ['Cero rastreo de telemetría o publicidad', 'Compatible con apps de Play Store vía Aurora Store', 'App Lounge con puntajes de privacidad por app'],
+                                  requirements: 'Bootloader desbloqueado + Formateo de Data',
+                                  officialUrl: 'https://e.foundation/get-started/',
+                                  deviceSearchUrl: 'https://doc.e.foundation/devices'
+                                },
+                                {
+                                  id: 'aospa',
+                                  name: 'Paranoid Android (AOSPA)',
+                                  category: 'custom',
+                                  badge: 'Diseño Exclusivo / Rendimiento Premium',
+                                  badgeColor: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
+                                  description: 'Una de las Custom ROMs más prestigiosas e históricas. Famosa por sus optimizaciones a nivel de kernel, sonido Dirac HD personalizado y una capa estética altamente cuidada que compite con el software de las mejores marcas.',
+                                  pros: ['Rendimiento del kernel altamente optimizado', 'Diseño de interfaz exclusivo y fondos cinemáticos', 'Estabilidad certificada para uso diario'],
+                                  requirements: 'Bootloader desbloqueado + Firmware base correspondiente',
+                                  officialUrl: 'https://paranoidandroid.co/',
+                                  deviceSearchUrl: 'https://paranoidandroid.co/'
+                                },
+                                {
+                                  id: 'evolutionx',
+                                  name: 'Evolution X',
+                                  category: 'custom',
+                                  badge: 'Pixel + Centro de Evolución',
+                                  badgeColor: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30',
+                                  description: 'El equilibrio perfecto entre la elegancia de un Google Pixel y un centro de personalización monumental ("The Evolver"). Soporta gestos avanzados, barra de estado modificable y GApps oficiales incluidas de serie.',
+                                  pros: ['GApps incluidas de fábrica', 'Actualizaciones continuas y soporte de parches', 'Ajustes finos de vibración y sonido'],
+                                  requirements: 'Bootloader desbloqueado',
+                                  officialUrl: 'https://evolution-x.org/',
+                                  deviceSearchUrl: 'https://evolution-x.org/downloads'
+                                },
+                                {
+                                  id: 'phh-gsi',
+                                  name: 'Project Treble GSIs (AOSP / AndyCGYan)',
+                                  category: 'gsi',
+                                  badge: 'Universal (Cualquier Android 8.0+)',
+                                  badgeColor: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30',
+                                  description: 'Si no existe una Custom ROM compilada específicamente para tu modelo exacto, las GSIs (Generic System Images) permiten instalar Android puro o AOSP en prácticamente cualquier smartphone con soporte Project Treble (arm64).',
+                                  pros: ['Funciona en teléfonos sin desarrollo oficial de ROMs', 'Flasheable directamente vía fastboot flash system system.img', 'Disponibles versiones con o sin GApps y con Root integrado'],
+                                  requirements: 'Dispositivo compatible con Treble (arm64) + vbmeta parcheado',
+                                  officialUrl: 'https://github.com/phhusson/treble_experimentations/wiki/Generic-System-Image-(GSI)-list',
+                                  deviceSearchUrl: 'https://github.com/AndyCGYan/treble_experimentations/releases'
+                                }
+                              ];
+
+                              const filteredRoms = customRoms.filter(rom => {
+                                const matchesCat = selectedRomCategory === 'all' || rom.category === selectedRomCategory;
+                                const matchesQuery = !romSearchQuery || rom.name.toLowerCase().includes(romSearchQuery.toLowerCase()) || rom.description.toLowerCase().includes(romSearchQuery.toLowerCase());
+                                return matchesCat && matchesQuery;
+                              });
+
+                              return (
+                                <div className="space-y-6">
+                                  {/* DEVICE CONTEXT CARD */}
+                                  <div className="bg-gradient-to-r from-emerald-950/40 via-slate-900/80 to-teal-950/40 border border-emerald-500/30 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+                                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-10">
+                                      <div className="flex items-start space-x-3.5">
+                                        <div className="p-3 bg-emerald-500/20 rounded-xl border border-emerald-500/30 text-emerald-400 shrink-0">
+                                          <Smartphone className="w-6 h-6" />
+                                        </div>
+                                        <div>
+                                          <div className="flex flex-wrap items-center gap-2">
+                                            <h4 className="text-xl font-black text-white">
+                                              {selectedDevice && deviceInfo
+                                                ? `${deviceInfo.manufacturer || ''} ${deviceInfo.model || selectedDevice}`
+                                                : targetModel || 'Seleccionar Dispositivo'}
+                                            </h4>
+                                            {deviceInfo?.androidVersion && (
+                                              <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                                                Android {deviceInfo.androidVersion}
+                                              </span>
+                                            )}
+                                            {deviceInfo?.board && (
+                                              <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                                                Placa: {deviceInfo.board}
+                                              </span>
+                                            )}
+                                            <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-slate-800 text-slate-300 border border-slate-700">
+                                              ABI: {deviceInfo?.cpuAbi || 'arm64-v8a'}
+                                            </span>
+                                          </div>
+                                          <p className="text-xs text-slate-400 mt-1 max-w-2xl">
+                                            {selectedDevice && deviceInfo
+                                              ? 'Enlaces y recomendaciones generados específicamente para tu hardware. Haz clic en cualquier portal oficial para consultar compatibilidad y descargar.'
+                                              : 'Exploración de sistemas operativos libre. Escribe un modelo abajo o conecta un teléfono por USB para autocompletar enlaces directos.'}
+                                          </p>
+                                        </div>
+                                      </div>
+
+                                      {/* Search / Manual model input */}
+                                      <div className="flex items-center gap-2">
+                                        {!selectedDevice && (
+                                          <input
+                                            type="text"
+                                            placeholder="Escribe tu modelo (ej. POCO F3)..."
+                                            value={manualDeviceSearch}
+                                            onChange={(e) => setManualDeviceSearch(e.target.value)}
+                                            className="px-3.5 py-2 bg-slate-900/90 border border-slate-700 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition-all font-mono"
+                                          />
+                                        )}
+                                        {targetModel && (
+                                          <a
+                                            href={`https://xdaforums.com/search/1/?q=${encodeURIComponent(targetModel + ' ROM')}&o=relevance`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="whitespace-nowrap px-4 py-2 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1.5"
+                                          >
+                                            <Globe className="w-3.5 h-3.5" />
+                                            <span>Foro XDA ({targetModel})</span>
+                                            <ExternalLink className="w-3 h-3 opacity-70" />
+                                          </a>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* FIRMWARES OFICIALES (STOCK ROMS) POR FABRICANTE */}
+                                  <div className="bg-slate-900/60 border border-slate-700/50 rounded-2xl p-6 shadow-xl">
+                                    <div className="flex items-center justify-between mb-4 border-b border-slate-800 pb-3">
+                                      <div className="flex items-center space-x-2">
+                                        <Layers className="w-5 h-5 text-blue-400" />
+                                        <h4 className="font-bold text-slate-100 text-base">Portales de Firmware Oficial (Stock ROMs de Fábrica)</h4>
+                                      </div>
+                                      <span className="text-xs text-slate-500 font-mono">Imágenes 100% Originales</span>
+                                    </div>
+                                    <p className="text-xs text-slate-400 mb-4 leading-relaxed">
+                                      Si deseas desrootear, restaurar el teléfono a su estado de fábrica o extraer el archivo <code className="text-blue-300 font-mono">boot.img</code> / <code className="text-blue-300 font-mono">init_boot.img</code> para parchearlo con Magisk o APatch, descarga el firmware exacto de tu modelo en los repositorios oficiales:
+                                    </p>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                      {/* Samsung */}
+                                      <div className={`p-3.5 rounded-xl border transition-all ${targetBrand.includes('samsung') ? 'bg-blue-500/10 border-blue-500/50 shadow-md' : 'bg-slate-800/40 border-slate-700/60'}`}>
+                                        <div className="flex items-center justify-between mb-1.5">
+                                          <span className="text-xs font-black uppercase text-blue-300">Samsung Galaxy</span>
+                                          {targetBrand.includes('samsung') && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400">Coincide</span>}
+                                        </div>
+                                        <p className="text-[11px] text-slate-400 mb-2.5">Descarga firmwares oficiales en formato 4 archivos (.tar.md5) a máxima velocidad.</p>
+                                        <div className="flex flex-wrap gap-1.5">
+                                          <a href={`https://samfw.com/firmware/${encodeURIComponent(targetModel || 'SM-')}`} target="_blank" rel="noopener noreferrer" className="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-[11px] font-bold transition-all flex items-center gap-1">
+                                            <span>SamFW {targetModel ? `(${targetModel})` : ''}</span>
+                                            <ExternalLink className="w-3 h-3 opacity-70" />
+                                          </a>
+                                          <a href="https://github.com/SlackingVeteran/frija/releases" target="_blank" rel="noopener noreferrer" className="px-2.5 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded text-[11px] font-medium transition-all flex items-center gap-1">
+                                            <span>Frija Tool</span>
+                                            <ExternalLink className="w-3 h-3 opacity-70" />
+                                          </a>
+                                        </div>
+                                      </div>
+
+                                      {/* Xiaomi */}
+                                      <div className={`p-3.5 rounded-xl border transition-all ${(targetBrand.includes('xiaomi') || targetBrand.includes('poco') || targetBrand.includes('redmi')) ? 'bg-orange-500/10 border-orange-500/50 shadow-md' : 'bg-slate-800/40 border-slate-700/60'}`}>
+                                        <div className="flex items-center justify-between mb-1.5">
+                                          <span className="text-xs font-black uppercase text-orange-300">Xiaomi / POCO / Redmi</span>
+                                          {(targetBrand.includes('xiaomi') || targetBrand.includes('poco') || targetBrand.includes('redmi')) && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-400">Coincide</span>}
+                                        </div>
+                                        <p className="text-[11px] text-slate-400 mb-2.5">Descarga ROMs oficiales Fastboot (.tgz) y Recovery (.zip) de MIUI e HyperOS.</p>
+                                        <div className="flex flex-wrap gap-1.5">
+                                          <a href="https://xiaomifirmwareupdater.com/" target="_blank" rel="noopener noreferrer" className="px-2.5 py-1 bg-orange-600 hover:bg-orange-500 text-white rounded text-[11px] font-bold transition-all flex items-center gap-1">
+                                            <span>XiaomiFirmwareUpdater</span>
+                                            <ExternalLink className="w-3 h-3 opacity-70" />
+                                          </a>
+                                          <a href={`https://mifirm.net/model/${encodeURIComponent(targetBoard || targetModel)}`} target="_blank" rel="noopener noreferrer" className="px-2.5 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded text-[11px] font-medium transition-all flex items-center gap-1">
+                                            <span>MiFirm</span>
+                                            <ExternalLink className="w-3 h-3 opacity-70" />
+                                          </a>
+                                        </div>
+                                      </div>
+
+                                      {/* Google Pixel */}
+                                      <div className={`p-3.5 rounded-xl border transition-all ${(targetBrand.includes('google') || targetBrand.includes('pixel')) ? 'bg-emerald-500/10 border-emerald-500/50 shadow-md' : 'bg-slate-800/40 border-slate-700/60'}`}>
+                                        <div className="flex items-center justify-between mb-1.5">
+                                          <span className="text-xs font-black uppercase text-emerald-300">Google Pixel</span>
+                                          {(targetBrand.includes('google') || targetBrand.includes('pixel')) && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400">Coincide</span>}
+                                        </div>
+                                        <p className="text-[11px] text-slate-400 mb-2.5">Imágenes de fábrica oficiales y herramienta web oficial por WebUSB.</p>
+                                        <div className="flex flex-wrap gap-1.5">
+                                          <a href="https://developers.google.com/android/images" target="_blank" rel="noopener noreferrer" className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[11px] font-bold transition-all flex items-center gap-1">
+                                            <span>Factory Images</span>
+                                            <ExternalLink className="w-3 h-3 opacity-70" />
+                                          </a>
+                                          <a href="https://flash.android.com/" target="_blank" rel="noopener noreferrer" className="px-2.5 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded text-[11px] font-medium transition-all flex items-center gap-1">
+                                            <span>Android Flash Tool</span>
+                                            <ExternalLink className="w-3 h-3 opacity-70" />
+                                          </a>
+                                        </div>
+                                      </div>
+
+                                      {/* Motorola */}
+                                      <div className={`p-3.5 rounded-xl border transition-all ${targetBrand.includes('motorola') ? 'bg-indigo-500/10 border-indigo-500/50 shadow-md' : 'bg-slate-800/40 border-slate-700/60'}`}>
+                                        <div className="flex items-center justify-between mb-1.5">
+                                          <span className="text-xs font-black uppercase text-indigo-300">Motorola</span>
+                                          {targetBrand.includes('motorola') && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-400">Coincide</span>}
+                                        </div>
+                                        <p className="text-[11px] text-slate-400 mb-2.5">Mirror oficial Lolinet de todos los firmwares xml para flasheo por fastboot.</p>
+                                        <a href="https://mirrors.lolinet.com/firmware/motorola/" target="_blank" rel="noopener noreferrer" className="inline-flex px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-[11px] font-bold transition-all items-center gap-1">
+                                          <span>Lolinet Moto Mirrors</span>
+                                          <ExternalLink className="w-3 h-3 opacity-70" />
+                                        </a>
+                                      </div>
+
+                                      {/* OnePlus */}
+                                      <div className={`p-3.5 rounded-xl border transition-all ${targetBrand.includes('oneplus') ? 'bg-red-500/10 border-red-500/50 shadow-md' : 'bg-slate-800/40 border-slate-700/60'}`}>
+                                        <div className="flex items-center justify-between mb-1.5">
+                                          <span className="text-xs font-black uppercase text-red-300">OnePlus</span>
+                                          {targetBrand.includes('oneplus') && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-500/20 text-red-400">Coincide</span>}
+                                        </div>
+                                        <p className="text-[11px] text-slate-400 mb-2.5">Firmwares OxygenOS y ColorOS oficiales de la comunidad OnePlus.</p>
+                                        <a href="https://service.oneplus.com/global/search/search-detail?id=2097368" target="_blank" rel="noopener noreferrer" className="inline-flex px-2.5 py-1 bg-red-600 hover:bg-red-500 text-white rounded text-[11px] font-bold transition-all items-center gap-1">
+                                          <span>OnePlus Firmware</span>
+                                          <ExternalLink className="w-3 h-3 opacity-70" />
+                                        </a>
+                                      </div>
+
+                                      {/* Búsqueda Universal */}
+                                      <div className="p-3.5 rounded-xl border border-slate-700/60 bg-slate-800/40">
+                                        <div className="flex items-center justify-between mb-1.5">
+                                          <span className="text-xs font-black uppercase text-slate-300">Otros Fabricantes</span>
+                                        </div>
+                                        <p className="text-[11px] text-slate-400 mb-2.5">Realme, Oppo, Vivo, Sony, Asus, Huawei, ZTE, etc.</p>
+                                        <a href={`https://www.google.com/search?q=${encodeURIComponent('Stock ROM Firmware official ' + targetBrand + ' ' + targetModel)}`} target="_blank" rel="noopener noreferrer" className="inline-flex px-2.5 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded text-[11px] font-bold transition-all items-center gap-1">
+                                          <span>Buscar Firmware de {targetModel || 'tu marca'}</span>
+                                          <ExternalLink className="w-3 h-3 opacity-70" />
+                                        </a>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* CUSTOM ROMS CATALOG */}
+                                  <div className="bg-slate-900/60 border border-slate-700/50 rounded-2xl p-6 shadow-xl space-y-6">
+                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+                                      <div>
+                                        <h4 className="font-bold text-slate-100 text-lg flex items-center gap-2">
+                                          <Sparkles className="w-5 h-5 text-emerald-400" />
+                                          Catálogo de Sistemas Operativos Personalizados (Custom ROMs)
+                                        </h4>
+                                        <p className="text-xs text-slate-400 mt-0.5">Sistemas operativos basados en AOSP para actualizar versiones de Android no soportadas o eliminar capas pesadas.</p>
+                                      </div>
+
+                                      {/* Búsqueda y Filtros de categoría */}
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <div className="relative">
+                                          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                                          <input
+                                            type="text"
+                                            value={romSearchQuery}
+                                            onChange={(e) => setRomSearchQuery(e.target.value)}
+                                            placeholder="Buscar ROM o función..."
+                                            className="pl-8 pr-7 py-1.5 bg-slate-800/80 border border-slate-700 rounded-xl text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition-all w-48"
+                                          />
+                                          {romSearchQuery && (
+                                            <button onClick={() => setRomSearchQuery('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white">
+                                              <X className="w-3 h-3" />
+                                            </button>
+                                          )}
+                                        </div>
+                                        <div className="flex bg-slate-800/80 p-1 rounded-xl border border-slate-700 gap-1 text-xs shrink-0 font-medium">
+                                          <button onClick={() => setSelectedRomCategory('all')} className={`px-3 py-1.5 rounded-lg transition-all ${selectedRomCategory === 'all' ? 'bg-emerald-600 text-white font-bold shadow' : 'text-slate-400 hover:text-slate-200'}`}>Todas ({customRoms.length})</button>
+                                          <button onClick={() => setSelectedRomCategory('custom')} className={`px-3 py-1.5 rounded-lg transition-all ${selectedRomCategory === 'custom' ? 'bg-emerald-600 text-white font-bold shadow' : 'text-slate-400 hover:text-slate-200'}`}>AOSP</button>
+                                          <button onClick={() => setSelectedRomCategory('gsi')} className={`px-3 py-1.5 rounded-lg transition-all ${selectedRomCategory === 'gsi' ? 'bg-emerald-600 text-white font-bold shadow' : 'text-slate-400 hover:text-slate-200'}`}>Treble GSIs</button>
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    {/* Grid de ROMs */}
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                                      {filteredRoms.map(rom => (
+                                        <div key={rom.id} className="bg-slate-800/50 border border-slate-700/80 rounded-2xl p-5 hover:border-slate-600 transition-all flex flex-col justify-between shadow-lg group">
+                                          <div>
+                                            <div className="flex items-start justify-between gap-2 mb-2">
+                                              <h5 className="font-bold text-lg text-white group-hover:text-emerald-300 transition-colors flex items-center gap-2">
+                                                {rom.name}
+                                              </h5>
+                                              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border shrink-0 ${rom.badgeColor}`}>
+                                                {rom.badge}
+                                              </span>
+                                            </div>
+                                            <p className="text-xs text-slate-300 leading-relaxed mb-4">
+                                              {rom.description}
+                                            </p>
+
+                                            <div className="space-y-1.5 mb-4 bg-slate-900/60 p-3 rounded-xl border border-slate-800 text-[11px]">
+                                              <p className="font-semibold text-slate-400">Ventajas clave:</p>
+                                              <ul className="list-disc list-inside space-y-0.5 text-slate-300">
+                                                {rom.pros.map((p, idx) => (
+                                                  <li key={idx}>{p}</li>
+                                                ))}
+                                              </ul>
+                                              <p className="text-[10px] text-amber-300/90 pt-1 border-t border-slate-800 mt-2 font-mono">
+                                                Requisito: {rom.requirements}
+                                              </p>
+                                            </div>
+                                          </div>
+
+                                          <div className="flex items-center gap-2 pt-2 border-t border-slate-700/50">
+                                            <a
+                                              href={rom.officialUrl}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="flex-1 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-all shadow-md flex items-center justify-center gap-1.5"
+                                            >
+                                              <Globe className="w-3.5 h-3.5" />
+                                              <span>Portal Oficial</span>
+                                              <ExternalLink className="w-3 h-3 opacity-70" />
+                                            </a>
+                                            <a
+                                              href={rom.deviceSearchUrl}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="py-2.5 px-3 rounded-xl bg-slate-700/80 hover:bg-slate-700 text-slate-200 font-medium text-xs transition-all border border-slate-600 flex items-center justify-center gap-1.5"
+                                              title="Buscar builds para este dispositivo"
+                                            >
+                                              <Download className="w-3.5 h-3.5 text-emerald-400" />
+                                              <span>Descargas</span>
+                                            </a>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })()}
+
+                            {/* SISTEMAS Y MÉTODOS DE RUTEO (ROOT ECOSYSTEM) */}
+                            {rootMode === 'root_systems' && (() => {
+                              const targetBrand = (deviceInfo?.brand || deviceInfo?.manufacturer || selectedBrand || '').toLowerCase();
+                              const targetModel = deviceInfo?.model || manualDeviceSearch || '';
+                              const androidVer = parseInt(deviceInfo?.androidVersion || '0');
+
+                              const rootTools = [
+                                {
+                                  id: 'magisk',
+                                  name: 'Magisk (Oficial)',
+                                  author: 'John Wu (topjohnwu)',
+                                  badge: 'Estándar Universal / Más Compatible',
+                                  badgeColor: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
+                                  type: 'Systemless Root (boot / init_boot)',
+                                  recommendedFor: 'Cualquier teléfono con Android 5.0 hasta Android 15',
+                                  description: 'El método de ruteo más popular y probado del mundo. Modifica la imagen de arranque (boot.img o init_boot.img) sin tocar las particiones protegidas del sistema (/system). Soporta Zygisk para inyectar código dinámicamente y miles de módulos para personalizar el sistema.',
+                                  features: [
+                                    'Zygisk integrado para ejecutar código en el proceso de apps',
+                                    'Magisk DenyList para ocultar root ante apps seleccionadas',
+                                    'Gestor completo de permisos Superusuario por app',
+                                    'Parcheo automático de boot.img e init_boot.img desde la propia app'
+                                  ],
+                                  downloadUrl: 'https://github.com/topjohnwu/Magisk/releases/latest',
+                                  docUrl: 'https://topjohnwu.github.io/Magisk/',
+                                  isDirectInstallable: true
+                                },
+                                {
+                                  id: 'kernelsu',
+                                  name: 'KernelSU',
+                                  author: 'tiann & Equipo KernelSU',
+                                  badge: 'Kernel-Level / Indetectable por Bancos',
+                                  badgeColor: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30',
+                                  type: 'Kernel Space Root (GKI 5.10+)',
+                                  recommendedFor: 'Dispositivos con Android 13+ y Kernel Linux 5.10+ (GKI)',
+                                  description: 'Revolucionario sistema de ruteo que opera directamente dentro del Kernel de Linux. Al residir en el espacio del kernel, ninguna app en userspace puede detectar binarios "su" ni firmas de root, logrando un bypass perfecto de detección bancaria.',
+                                  features: [
+                                    'Indetectabilidad real por diseño frente a apps bancarias y streaming',
+                                    'Gestión de permisos basada en UID de Linux',
+                                    'Módulos mediante OverlayFS (sistema de archivos superpuesto)',
+                                    'Sin hooks invasivos en el runtime de Android'
+                                  ],
+                                  downloadUrl: 'https://github.com/tiann/KernelSU/releases',
+                                  docUrl: 'https://kernelsu.org/'
+                                },
+                                {
+                                  id: 'apatch',
+                                  name: 'APatch',
+                                  author: 'bmax121 & Equipo APatch',
+                                  badge: 'KernelPatch / No Requiere Kernel GKI Compilado',
+                                  badgeColor: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
+                                  type: 'KernelPatch SuperCall',
+                                  recommendedFor: 'Dispositivos Android 9 a 14 sin Kernel GKI oficial',
+                                  description: 'Inspirado en KernelSU y Magisk, APatch utiliza KernelPatch para parchear directamente la imagen boot.img sin necesidad de que el fabricante provea un kernel GKI oficial ni compilar código fuente. Permite definir una SuperKey secreta para autorizar accesos.',
+                                  features: [
+                                    'No requiere compilar un kernel personalizado desde el código fuente',
+                                    'Control de acceso protegido con contraseña / SuperKey exclusiva',
+                                    'Soporta módulos APM y compatibilidad con Zygisk mediante ZygiskNext',
+                                    'Menor consumo de recursos y bypass de detección robusto'
+                                  ],
+                                  downloadUrl: 'https://github.com/bmax121/APatch/releases',
+                                  docUrl: 'https://apatch.dev/'
+                                },
+                                {
+                                  id: 'kitsune',
+                                  name: 'Kitsune Mask (Magisk Delta)',
+                                  author: 'HuskyDG',
+                                  badge: 'Magisk con MagiskHide Clásico Aislado',
+                                  badgeColor: 'bg-pink-500/20 text-pink-400 border-pink-500/30',
+                                  type: 'Systemless + MagiskHide Real',
+                                  recommendedFor: 'Usuarios de Magisk con problemas de detección bancaria persistente',
+                                  description: 'Una bifurcación avanzada de Magisk que restaura el mecanismo clásico de MagiskHide con aislamiento de montaje estricto, ideal para omitir Play Integrity y controles bancarios donde Magisk oficial es detectado.',
+                                  features: [
+                                    'MagiskHide clásico con aislamiento de procesos avanzado',
+                                    'Montaje de módulos invisible para apps no autorizadas',
+                                    'Soporte completo para Zygisk y Shamiko'
+                                  ],
+                                  downloadUrl: 'https://github.com/HuskyDG/magisk-files/releases',
+                                  docUrl: 'https://github.com/HuskyDG/magisk-files'
+                                },
+                                {
+                                  id: 'supersu',
+                                  name: 'SuperSU (Chainfire)',
+                                  author: 'Chainfire (Legacy)',
+                                  badge: 'Legacy (Android 4.4 a 7.1)',
+                                  badgeColor: 'bg-slate-500/20 text-slate-400 border-slate-500/30',
+                                  type: 'Classic System Root',
+                                  recommendedFor: 'Teléfonos y tablets antiguas (Android 4.4 KitKat a 7.1 Nougat)',
+                                  description: 'El legendario binario de superusuario de Chainfire para terminales de generaciones anteriores. Se flashea como un archivo ZIP a través de un recovery táctil como TWRP o CWM.',
+                                  features: [
+                                    'Compatible con arquitecturas ARMv7, x86 y MIPS antiguas',
+                                    'Flasheo directo vía Recovery ZIP sin dependencias modernas',
+                                    'Gestión básica de permisos su'
+                                  ],
+                                  downloadUrl: 'https://supersuroot.org/',
+                                  docUrl: 'https://supersuroot.org/'
+                                }
+                              ];
+
+                              return (
+                                <div className="space-y-6">
+                                  {/* RECOMENDACIÓN INTELIGENTE SEGÚN ANDROID */}
+                                  <div className="bg-gradient-to-r from-purple-950/40 via-slate-900/80 to-pink-950/40 border border-purple-500/30 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+                                    <div className="flex items-start space-x-3.5">
+                                      <div className="p-3 bg-purple-500/20 rounded-xl border border-purple-500/30 text-purple-400 shrink-0">
+                                        <ShieldCheck className="w-6 h-6" />
+                                      </div>
+                                      <div>
+                                        <h4 className="text-xl font-black text-white flex flex-wrap items-center gap-2">
+                                          <span>Guía de Selección de Ruteo</span>
+                                          {targetModel && (
+                                            <span className="text-xs bg-slate-800 text-slate-300 border border-slate-700 px-2.5 py-0.5 rounded-full font-mono">
+                                              {targetModel}
+                                            </span>
+                                          )}
+                                          {androidVer > 0 && (
+                                            <span className="text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30 px-2.5 py-0.5 rounded-full font-mono">
+                                              Detectado Android {androidVer}
+                                            </span>
+                                          )}
+                                        </h4>
+                                        <p className="text-xs text-slate-300 mt-1 max-w-3xl leading-relaxed">
+                                          {targetBrand.includes('samsung') ? (
+                                            <>
+                                              Para <strong>Samsung Galaxy</strong>, el ruteo se realiza descargando el firmware oficial con SamFW o Frija, extrayendo el archivo <code className="text-purple-300 font-mono">AP_*.tar.md5</code>, parcheándolo con la app de <strong>Magisk</strong> en el teléfono y flasheándolo mediante la pestaña <strong>Samsung Odin Flasher</strong> de esta aplicación.
+                                            </>
+                                          ) : androidVer >= 13 ? (
+                                            <>
+                                              Tu dispositivo cuenta con <strong>Android 13 o superior</strong>. Si tu kernel es compatible con GKI (Linux 5.10+), te recomendamos <strong>KernelSU</strong> o <strong>APatch</strong> para evitar que las aplicaciones bancarias detecten el root. Si prefieres máxima compatibilidad con módulos Zygisk, utiliza <strong>Magisk</strong> parcheando la partición <code className="text-purple-300 font-mono">init_boot.img</code>.
+                                            </>
+                                          ) : androidVer >= 9 ? (
+                                            <>
+                                              Tu dispositivo cuenta con <strong>Android {androidVer}</strong>. El método universal estándar y más estable es <strong>Magisk</strong>, parcheando la partición <code className="text-purple-300 font-mono">boot.img</code> original de tu teléfono y flasheándola vía Fastboot.
+                                            </>
+                                          ) : (
+                                            <>
+                                              Para dispositivos clásicos o antiguos, <strong>Magisk v23.0</strong> o <strong>SuperSU ZIP</strong> (vía Recovery) son las opciones recomendadas.
+                                            </>
+                                          )}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* ROOT SYSTEMS CARDS */}
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                                    {rootTools.map(tool => (
+                                      <div key={tool.id} className="bg-slate-800/50 border border-slate-700/80 rounded-2xl p-6 hover:border-slate-600 transition-all flex flex-col justify-between shadow-lg group">
+                                        <div>
+                                          <div className="flex items-start justify-between gap-2 mb-2">
+                                            <div>
+                                              <h5 className="font-bold text-lg text-white group-hover:text-purple-300 transition-colors">
+                                                {tool.name}
+                                              </h5>
+                                              <p className="text-xs text-slate-400">Por {tool.author}</p>
+                                            </div>
+                                            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border shrink-0 ${tool.badgeColor}`}>
+                                              {tool.badge}
+                                            </span>
+                                          </div>
+
+                                          <div className="flex flex-wrap gap-2 mb-3">
+                                            <span className="text-[10px] font-mono bg-slate-900 text-slate-300 px-2 py-0.5 rounded border border-slate-700">
+                                              Tipo: {tool.type}
+                                            </span>
+                                          </div>
+
+                                          <p className="text-xs text-slate-300 leading-relaxed mb-4">
+                                            {tool.description}
+                                          </p>
+
+                                          <div className="space-y-1.5 mb-4 bg-slate-900/60 p-3.5 rounded-xl border border-slate-800 text-[11px]">
+                                            <p className="font-semibold text-slate-400">Características técnicas:</p>
+                                            <ul className="list-disc list-inside space-y-0.5 text-slate-300">
+                                              {tool.features.map((f, idx) => (
+                                                <li key={idx}>{f}</li>
+                                              ))}
+                                            </ul>
+                                            <p className="text-[10px] text-purple-300/90 pt-1 border-t border-slate-800 mt-2 font-mono">
+                                              Recomendado: {tool.recommendedFor}
+                                            </p>
+                                          </div>
+                                        </div>
+
+                                        <div className="flex flex-wrap items-center gap-2 pt-3 border-t border-slate-700/50">
+                                          <a
+                                            href={tool.downloadUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="flex-1 py-2.5 px-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs transition-all shadow-md flex items-center justify-center gap-1.5"
+                                          >
+                                            <Download className="w-3.5 h-3.5" />
+                                            <span>Descargar Oficial</span>
+                                            <ExternalLink className="w-3 h-3 opacity-70" />
+                                          </a>
+                                          {tool.isDirectInstallable && (
+                                            <button
+                                              onClick={handleInstallMagisk}
+                                              disabled={isInstallingMagisk || !selectedDevice}
+                                              className="py-2.5 px-3 rounded-xl bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white font-bold text-xs transition-all border border-emerald-500/30 flex items-center justify-center gap-1.5 disabled:opacity-50"
+                                              title={!selectedDevice ? 'Conecta un dispositivo para instalar' : 'Descargar e instalar APK por USB'}
+                                            >
+                                              <Box className={`w-3.5 h-3.5 ${isInstallingMagisk ? 'animate-spin' : ''}`} />
+                                              <span>{isInstallingMagisk ? 'Instalando...' : 'Instalar por USB'}</span>
+                                            </button>
+                                          )}
+                                          <a
+                                            href={tool.docUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="py-2.5 px-3 rounded-xl bg-slate-700/80 hover:bg-slate-700 text-slate-200 font-medium text-xs transition-all border border-slate-600 flex items-center justify-center gap-1"
+                                            title="Ver documentación y tutoriales"
+                                          >
+                                            <BookOpen className="w-3.5 h-3.5 text-purple-400" />
+                                            <span>Guía</span>
+                                          </a>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+
+                                  {/* COMPARATIVA RESUMIDA */}
+                                  <div className="bg-slate-900/60 border border-slate-700/50 rounded-2xl p-6 shadow-xl overflow-x-auto">
+                                    <h4 className="font-bold text-slate-100 text-base mb-4 flex items-center gap-2">
+                                      <Layers className="w-5 h-5 text-purple-400" />
+                                      Tabla Comparativa: ¿Cuál método de ruteo elegir?
+                                    </h4>
+                                    <table className="w-full text-left text-xs font-mono">
+                                      <thead className="bg-slate-800 text-slate-400">
+                                        <tr>
+                                          <th className="px-4 py-3 rounded-l-xl">Método</th>
+                                          <th className="px-4 py-3">Capa de Inyección</th>
+                                          <th className="px-4 py-3">Detección Bancaria</th>
+                                          <th className="px-4 py-3">Módulos</th>
+                                          <th className="px-4 py-3 rounded-r-xl">Compatibilidad</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-slate-800 text-slate-300">
+                                        <tr>
+                                          <td className="px-4 py-3 font-bold text-emerald-400">Magisk</td>
+                                          <td className="px-4 py-3">Userspace (/init + overlay)</td>
+                                          <td className="px-4 py-3 text-amber-400">Media (requiere Zygisk+Shamiko)</td>
+                                          <td className="px-4 py-3 text-emerald-400">Miles de módulos Zygisk</td>
+                                          <td className="px-4 py-3">Android 5.0 a 15</td>
+                                        </tr>
+                                        <tr>
+                                          <td className="px-4 py-3 font-bold text-indigo-400">KernelSU</td>
+                                          <td className="px-4 py-3">Kernel Linux (GKI)</td>
+                                          <td className="px-4 py-3 text-emerald-400">Nula (Indetectable por diseño)</td>
+                                          <td className="px-4 py-3 text-indigo-400">OverlayFS + ZygiskNext</td>
+                                          <td className="px-4 py-3">Android 12+ (Kernel 5.10+)</td>
+                                        </tr>
+                                        <tr>
+                                          <td className="px-4 py-3 font-bold text-purple-400">APatch</td>
+                                          <td className="px-4 py-3">KernelPatch SuperCall</td>
+                                          <td className="px-4 py-3 text-emerald-400">Muy Baja (Clave SuperKey)</td>
+                                          <td className="px-4 py-3 text-purple-400">Módulos APM + ZygiskNext</td>
+                                          <td className="px-4 py-3">Android 9 a 14</td>
+                                        </tr>
+                                        <tr>
+                                          <td className="px-4 py-3 font-bold text-pink-400">Kitsune Mask</td>
+                                          <td className="px-4 py-3">Userspace aislado</td>
+                                          <td className="px-4 py-3 text-emerald-400">Baja (MagiskHide restaurado)</td>
+                                          <td className="px-4 py-3 text-pink-400">Módulos Magisk tradicionales</td>
+                                          <td className="px-4 py-3">Android 8.0 a 14</td>
+                                        </tr>
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </div>
+                              );
+                            })()}
+
+                            {/* CUSTOM RECOVERIES */}
+                            {rootMode === 'recoveries' && (() => {
+                              const targetBrand = (deviceInfo?.brand || deviceInfo?.manufacturer || selectedBrand || '').toLowerCase();
+                              const targetModel = deviceInfo?.model || manualDeviceSearch || '';
+                              const targetBoard = deviceInfo?.board || '';
+
+                              const recoveries = [
+                                {
+                                  id: 'twrp',
+                                  name: 'TWRP (Team Win Recovery Project)',
+                                  badge: 'Recovery Táctil Universal Estándar',
+                                  badgeColor: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+                                  description: 'El Recovery más utilizado y con mayor compatibilidad en la historia de Android. Cuenta con soporte táctil completo, cifrado de particiones, copias de seguridad NAND integrales (Nandroid Backup), flasheo de ZIPs y terminal de comandos ADB Sideload.',
+                                  features: [
+                                    'Copias de seguridad completas de Boot, System, Vendor y Data',
+                                    'Flasheo de ROMs, zips de Magisk, kernels y parches',
+                                    'Soporte para MTP (conectar a PC por USB y transferir archivos desde recovery)',
+                                    'Montaje selectivo y formateo de particiones'
+                                  ],
+                                  officialUrl: 'https://twrp.me/Devices/',
+                                  searchUrl: `https://www.google.com/search?q=TWRP+Recovery+official+${encodeURIComponent(targetBrand + ' ' + targetModel)}`
+                                },
+                                {
+                                  id: 'orangefox',
+                                  name: 'OrangeFox Recovery Project',
+                                  badge: 'Moderno / Soporte Cifrado y MIUI/AOSP',
+                                  badgeColor: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
+                                  description: 'Uno de los proyectos de recovery más refinados y activos, muy popular en terminales Xiaomi, Redmi, POCO, Samsung y Realme. Ofrece interfaz moderna, motor de temas, protección por contraseña/PIN para acceder al recovery e instalador automático de Magisk sin necesidad de descargar archivos adicionales.',
+                                  features: [
+                                    'Soporte integrado para descifrado de almacenamiento en Android 11, 12, 13 y 14',
+                                    'Instalación directa de Magisk con un solo botón',
+                                    'Soporte nativo para actualizaciones OTA oficiales',
+                                    'Linterna, editor de terminal y explorador de archivos avanzado'
+                                  ],
+                                  officialUrl: 'https://orangefox.download/',
+                                  searchUrl: 'https://orangefox.download/'
+                                },
+                                {
+                                  id: 'pbrp',
+                                  name: 'PitchBlack Recovery Project (PBRP)',
+                                  badge: 'Herramientas de Bypass y Rescate',
+                                  badgeColor: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
+                                  description: 'Basado en TWRP con herramientas especializadas añadidas para desarrolladores y técnicos. Incluye parches automáticos para DM-Verity y ForceEncrypt, bypass de PIN/Patrón de bloqueo y soporte de temas.',
+                                  features: [
+                                    'Herramientas integradas para deshabilitar ForceEncrypt',
+                                    'Bypass de claves de bloqueo de pantalla directamente desde el menú',
+                                    'Protección contra sobreescritura del recovery por ROMs stock'
+                                  ],
+                                  officialUrl: 'https://pbrp.site/',
+                                  searchUrl: 'https://pbrp.site/'
+                                }
+                              ];
+
+                              return (
+                                <div className="space-y-6">
+                                  {/* RECOVERIES INTRO CARD */}
+                                  <div className="bg-gradient-to-r from-cyan-950/40 via-slate-900/80 to-blue-950/40 border border-cyan-500/30 rounded-2xl p-6 shadow-xl">
+                                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                      <div className="flex items-start space-x-3.5">
+                                        <div className="p-3 bg-cyan-500/20 rounded-xl border border-cyan-500/30 text-cyan-400 shrink-0">
+                                          <Layers className="w-6 h-6" />
+                                        </div>
+                                        <div>
+                                          <h4 className="text-xl font-black text-white flex flex-wrap items-center gap-2">
+                                            <span>Custom Recoveries para {targetModel || 'tu Dispositivo'}</span>
+                                            {targetBoard && (
+                                              <span className="text-xs bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 px-2.5 py-0.5 rounded-full font-mono font-bold">
+                                                Board: {targetBoard}
+                                              </span>
+                                            )}
+                                          </h4>
+                                          <p className="text-xs text-slate-300 mt-1 max-w-2xl leading-relaxed">
+                                            Un Custom Recovery sustituye el menú de recuperación de fábrica y es imprescindible para instalar Custom ROMs, hacer copias de seguridad de todas las particiones del teléfono y flashear zips sin pasar por la computadora.
+                                          </p>
+                                        </div>
+                                      </div>
+                                      <div className="flex items-center gap-2">
+                                        {targetModel && (
+                                          <a
+                                            href={`https://www.google.com/search?q=TWRP+OrangeFox+Recovery+${encodeURIComponent(targetBrand + ' ' + targetModel)}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1.5"
+                                          >
+                                            <Search className="w-3.5 h-3.5" />
+                                            <span>Buscar Recovery para {targetModel}</span>
+                                            <ExternalLink className="w-3 h-3 opacity-70" />
+                                          </a>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* RECOVERIES LIST */}
+                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                                    {recoveries.map(rec => (
+                                      <div key={rec.id} className="bg-slate-800/50 border border-slate-700/80 rounded-2xl p-6 hover:border-slate-600 transition-all flex flex-col justify-between shadow-lg group">
+                                        <div>
+                                          <div className="flex items-start justify-between gap-2 mb-2">
+                                            <h5 className="font-bold text-lg text-white group-hover:text-cyan-300 transition-colors">
+                                              {rec.name}
+                                            </h5>
+                                          </div>
+                                          <span className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold border mb-3 ${rec.badgeColor}`}>
+                                            {rec.badge}
+                                          </span>
+
+                                          <p className="text-xs text-slate-300 leading-relaxed mb-4">
+                                            {rec.description}
+                                          </p>
+
+                                          <div className="space-y-1.5 mb-4 bg-slate-900/60 p-3 rounded-xl border border-slate-800 text-[11px]">
+                                            <p className="font-semibold text-slate-400">Funciones destacadas:</p>
+                                            <ul className="list-disc list-inside space-y-0.5 text-slate-300">
+                                              {rec.features.map((f, idx) => (
+                                                <li key={idx}>{f}</li>
+                                              ))}
+                                            </ul>
+                                          </div>
+                                        </div>
+
+                                        <div className="flex items-center gap-2 pt-2 border-t border-slate-700/50">
+                                          <a
+                                            href={rec.officialUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="flex-1 py-2.5 px-3 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs transition-all shadow-md flex items-center justify-center gap-1.5"
+                                          >
+                                            <Globe className="w-3.5 h-3.5" />
+                                            <span>Portal Oficial</span>
+                                            <ExternalLink className="w-3 h-3 opacity-70" />
+                                          </a>
+                                          <a
+                                            href={rec.searchUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="py-2.5 px-3 rounded-xl bg-slate-700/80 hover:bg-slate-700 text-slate-200 font-medium text-xs transition-all border border-slate-600 flex items-center justify-center gap-1"
+                                            title="Buscar versión para tu modelo"
+                                          >
+                                            <Search className="w-3.5 h-3.5 text-cyan-400" />
+                                            <span>Buscar</span>
+                                          </a>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+
+                                  {/* FASTBOOT CHEATSHEET */}
+                                  <div className="bg-slate-900/60 border border-slate-700/50 rounded-2xl p-6 shadow-xl space-y-3">
+                                    <h4 className="font-bold text-slate-100 text-base flex items-center gap-2">
+                                      <TerminalSquare className="w-5 h-5 text-cyan-400" />
+                                      Comandos para Flashear Recovery vía Fastboot
+                                    </h4>
+                                    <div className="space-y-2 text-xs font-mono">
+                                      <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 flex items-center justify-between">
+                                        <div>
+                                          <span className="text-cyan-400 font-bold">fastboot flash recovery twrp.img</span>
+                                          <p className="text-[11px] text-slate-500 font-sans mt-0.5">Para teléfonos con partición recovery dedicada (la gran mayoría hasta Android 9/10).</p>
+                                        </div>
+                                      </div>
+                                      <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 flex items-center justify-between">
+                                        <div>
+                                          <span className="text-cyan-400 font-bold">fastboot boot twrp.img</span>
+                                          <p className="text-[11px] text-slate-500 font-sans mt-0.5">Para iniciar el recovery temporalmente sin sobreescribir la partición (ideal para probar).</p>
+                                        </div>
+                                      </div>
+                                      <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 flex items-center justify-between">
+                                        <div>
+                                          <span className="text-cyan-400 font-bold">fastboot flash boot twrp.img</span>
+                                          <p className="text-[11px] text-slate-500 font-sans mt-0.5">Para dispositivos modernos sin partición recovery física (donde el ramdisk del recovery va dentro del boot).</p>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </div>
                         )}
                       </div>
@@ -3673,6 +4554,93 @@ function App() {
                               <HardDriveDownload className="w-3.5 h-3.5 text-cyan-400" />
                               <span>Descargar Archivo PIT</span>
                             </button>
+                          </div>
+                        </div>
+
+                        {/* DESCARGA DE FIRMWARE OFICIAL SAMSUNG (SAMFW, FRIJA, SAMMOBILE) */}
+                        <div className="bg-gradient-to-r from-sky-950/30 via-slate-900/80 to-blue-950/30 border border-sky-500/30 rounded-3xl p-6 sm:p-7 backdrop-blur-xl shadow-2xl relative overflow-hidden space-y-4">
+                          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                            <div className="flex items-start space-x-3.5">
+                              <div className="p-3 bg-sky-500/20 rounded-2xl border border-sky-500/30 text-sky-400 shrink-0">
+                                <Download className="w-6 h-6" />
+                              </div>
+                              <div>
+                                <div className="flex items-center gap-2 mb-1">
+                                  <h4 className="text-lg font-bold text-white tracking-wide">
+                                    Descarga de Firmware Oficial Samsung Stock
+                                  </h4>
+                                  <span className="text-[10px] bg-sky-500/20 text-sky-300 border border-sky-500/30 px-2 py-0.5 rounded-full font-bold uppercase">
+                                    4 Archivos (BL, AP, CP, CSC)
+                                  </span>
+                                </div>
+                                <p className="text-xs text-slate-300 max-w-3xl leading-relaxed">
+                                  Obtén el firmware oficial original para desbrickear, actualizar versiones de One UI, restaurar el teléfono de fábrica o extraer la partición <code className="text-sky-300 font-mono">AP</code> para ruteo con Magisk.
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Enlaces de Descarga Rápida */}
+                            <div className="flex flex-wrap items-center gap-2 shrink-0">
+                              <a
+                                href={deviceInfo?.model ? `https://samfw.com/firmware/${encodeURIComponent(deviceInfo.model)}` : "https://samfw.com/"}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-3.5 py-2 bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1.5"
+                              >
+                                <span>SamFW {deviceInfo?.model ? `(${deviceInfo.model})` : ''}</span>
+                                <ExternalLink className="w-3.5 h-3.5" />
+                              </a>
+                              <a
+                                href="https://github.com/SlackingVeteran/frija/releases"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5"
+                                title="Herramienta de descarga directa a máxima velocidad desde los servidores de Samsung FUS"
+                              >
+                                <span>Frija Tool (FUS)</span>
+                                <ExternalLink className="w-3.5 h-3.5 opacity-70" />
+                              </a>
+                              <a
+                                href="https://www.sammobile.com/samsung/firmware/"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5"
+                              >
+                                <span>SamMobile</span>
+                                <ExternalLink className="w-3.5 h-3.5 opacity-70" />
+                              </a>
+                            </div>
+                          </div>
+
+                          {/* Notas técnicas de seguridad para Samsung */}
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 text-[11px]">
+                            <div className="bg-slate-900/70 p-3 rounded-xl border border-slate-800">
+                              <p className="font-bold text-sky-300 flex items-center gap-1.5 mb-1">
+                                <ShieldCheck className="w-3.5 h-3.5 text-sky-400" />
+                                Bit / Binario (Anti-Rollback)
+                              </p>
+                              <p className="text-slate-400 leading-snug">
+                                El 5º carácter contando desde la derecha del firmware representa el Binario. <strong>Nunca instales un binario inferior</strong> al que tiene tu dispositivo actualmente.
+                              </p>
+                            </div>
+                            <div className="bg-slate-900/70 p-3 rounded-xl border border-slate-800">
+                              <p className="font-bold text-cyan-300 flex items-center gap-1.5 mb-1">
+                                <Layers className="w-3.5 h-3.5 text-cyan-400" />
+                                CSC vs HOME_CSC
+                              </p>
+                              <p className="text-slate-400 leading-snug">
+                                Usa el archivo <strong>CSC estándar</strong> para formatear de fábrica el dispositivo en limpio. Usa <strong>HOME_CSC</strong> si deseas conservar todas tus fotos, apps y datos.
+                              </p>
+                            </div>
+                            <div className="bg-slate-900/70 p-3 rounded-xl border border-slate-800">
+                              <p className="font-bold text-indigo-300 flex items-center gap-1.5 mb-1">
+                                <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                                Ruteo con Magisk en Samsung
+                              </p>
+                              <p className="text-slate-400 leading-snug">
+                                Copia el archivo <code className="text-indigo-300 font-mono">AP_*.tar.md5</code> al teléfono, ábrelo en la app de Magisk para parchearlo, transfiérelo de vuelta al PC y cárgalo en el slot AP.
+                              </p>
+                            </div>
                           </div>
                         </div>
 
