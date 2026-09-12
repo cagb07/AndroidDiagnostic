@@ -3476,6 +3476,18 @@ app.get('/api/odin/detect', async (req, res) => {
 
 // Reboot connected ADB device to Samsung Download Mode
 app.post('/api/odin/reboot-download', async (req, res) => {
+  // 1. Si el dispositivo ya está conectado físicamente en Modo Descarga (Odin Mode)
+  try {
+    const { stdout: detOut } = await execAsync(`"${HEIMDALL_PATH}" detect`).catch(() => ({ stdout: '' }));
+    if (detOut && detOut.toLowerCase().includes('device detected')) {
+      return res.json({
+        success: true,
+        alreadyInDownloadMode: true,
+        message: 'El dispositivo Samsung ya se encuentra conectado en Modo Descarga (Odin Mode). Listo para flashear.'
+      });
+    }
+  } catch {}
+
   let { id } = req.body;
   if (!id) {
     try {
@@ -3486,7 +3498,7 @@ app.post('/api/odin/reboot-download', async (req, res) => {
     } catch {}
   }
   if (!id) {
-    return res.status(400).json({ success: false, error: 'No se encontró ningún dispositivo Android conectado por USB para reiniciar.' });
+    return res.status(400).json({ success: false, error: 'No se encontró ningún dispositivo Android conectado por USB para reiniciar. Si tu teléfono ya muestra la pantalla celeste "Downloading...", ya está en Modo Descarga.' });
   }
   try {
     try {
@@ -4042,14 +4054,15 @@ async function executeHeimdallFlash(
   } catch (err: any) {
     const combined = ((err.stdout || '') + '\n' + (err.stderr || '') + '\n' + (err.message || '')).toLowerCase();
     if (combined.includes('protocol initialisation failed') || combined.includes('failed to receive handshake') || combined.includes('result: -7')) {
-      throw new Error(
+      const handshakeErr: any = new Error(
         'Fallo de comunicación USB con el bootloader de Samsung (Handshake Timeout / Result: -7).\n\n' +
-        'El teléfono quedó en una sesión USB previa o en pausa. Para que Heimdall pueda iniciar la transferencia:\n' +
-        '1. Desconecta el cable USB del teléfono.\n' +
-        '2. Reinicia el dispositivo en Modo Descarga: mantén presionados al mismo tiempo los botones [Bajar Volumen + Home + Encendido] por 7 segundos hasta que la pantalla se apague.\n' +
-        '3. En la pantalla de advertencia con letras celestes, presiona [Subir Volumen] para entrar a "Downloading...".\n' +
-        '4. Conecta de nuevo el cable USB a la Mac y pulsa "Flashear" (los archivos ya están preparados y el flasheo iniciará inmediatamente).'
+        'El teléfono está en Modo Descarga pero el bootloader no respondió al apretón de manos inicial de Heimdall.\n\n' +
+        '1. Desconecta y vuelve a conectar el cable USB del teléfono.\n' +
+        '2. Si persiste, reinicia en Modo Descarga: mantén presionados [Bajar Volumen + Home + Encendido] hasta apagar, y luego [Subir Volumen] para continuar a "Downloading...".\n' +
+        '3. Conecta el cable USB preferentemente en un puerto USB directo sin hub intermedio.'
       );
+      handshakeErr.isHandshakeError = true;
+      throw handshakeErr;
     }
     if (combined.includes('does not exist in the specified pit') || combined.includes('failed to confirm partition name')) {
       throw new Error(
@@ -4320,13 +4333,15 @@ app.post('/api/odin/flash-extracted-session', async (req, res) => {
 
   } catch (err: any) {
     log(`ERROR: ${err.message}`);
-    const notInDownload = err.notInDownloadMode || 
-                          err.message.toLowerCase().includes('modo descarga') || 
-                          err.message.toLowerCase().includes('download-mode') ||
-                          err.message.toLowerCase().includes('failed to detect');
-    res.status(notInDownload ? 400 : 500).json({
+    const isHandshake = Boolean(err.isHandshakeError) || 
+                        err.message.includes('Result: -7') || 
+                        err.message.includes('Handshake Timeout') ||
+                        err.message.includes('Protocol initialisation failed');
+    const notInDownload = Boolean(err.notInDownloadMode) && !isHandshake;
+    res.status(400).json({
       success: false,
       notInDownloadMode: notInDownload,
+      isHandshakeError: isHandshake,
       error: err.message,
       logs: logs.join('\n') + '\n' + (err.stdout || '') + '\n' + (err.stderr || '')
     });
@@ -4394,13 +4409,15 @@ app.post('/api/odin/flash', upload.fields([
 
   } catch (err: any) {
     log(`ERROR: ${err.message}`);
-    const notInDownload = err.notInDownloadMode || 
-                          err.message.toLowerCase().includes('modo descarga') || 
-                          err.message.toLowerCase().includes('download-mode') ||
-                          err.message.toLowerCase().includes('failed to detect');
-    res.status(notInDownload ? 400 : 500).json({
+    const isHandshake = Boolean(err.isHandshakeError) || 
+                        err.message.includes('Result: -7') || 
+                        err.message.includes('Handshake Timeout') ||
+                        err.message.includes('Protocol initialisation failed');
+    const notInDownload = Boolean(err.notInDownloadMode) && !isHandshake;
+    res.status(400).json({
       success: false,
       notInDownloadMode: notInDownload,
+      isHandshakeError: isHandshake,
       error: err.message,
       logs: logs.join('\n') + '\n' + (err.stdout || '') + '\n' + (err.stderr || '')
     });

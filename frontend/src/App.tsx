@@ -545,6 +545,10 @@ function App() {
   };
 
   const handleOdinRebootDownload = async () => {
+    if (odinDeviceDetected || selectedDevice === 'SAMSUNG-ODIN-MODE') {
+      addToast('El dispositivo ya se encuentra en Modo Descarga (Odin Mode). Listo para flashear.', 'info');
+      return;
+    }
     const targetId = selectedDevice || (devices.length > 0 ? devices[0].id : null);
     if (!targetId) {
       addToast('Conecta un dispositivo Android por USB primero para reiniciar', 'error');
@@ -813,7 +817,11 @@ function App() {
     } catch (e: any) {
       const errMsg = e.response?.data?.error || e.message;
       const errLogs = e.response?.data?.logs || '';
-      const notInDownload = e.response?.data?.notInDownloadMode || errMsg.toLowerCase().includes('modo descarga');
+      const notInDownload = Boolean(e.response?.data?.notInDownloadMode);
+      const isHandshake = Boolean(e.response?.data?.isHandshakeError) || 
+                          errMsg.includes('Result: -7') || 
+                          errMsg.includes('Handshake Timeout') || 
+                          errMsg.includes('Protocol initialisation');
 
       if (notInDownload) {
         const shouldReboot = await customConfirm(
@@ -822,6 +830,10 @@ function App() {
         if (shouldReboot) {
           await handleOdinRebootDownload();
         }
+      } else if (isHandshake) {
+        await customConfirm(
+          `FALLO DE COMUNICACIÓN USB CON EL BOOTLOADER (RESULT: -7)\n\nEl teléfono está en Modo Descarga pero el bootloader no respondió al apretón de manos inicial de Heimdall.\n\nEn procesadores Spreadtrum (SC7730 / Galaxy Grand Prime VE), esto se soluciona:\n1. Desconecta y vuelve a conectar el cable USB del teléfono.\n2. Si el bootloader quedó congelado tras el intento fallido, mantén presionados [Volumen Abajo + Home + Encendido] por 7 segundos para reiniciar en Modo Descarga, y pulsa [Volumen Arriba] para entrar a "Downloading...".\n3. Conecta el cable USB en un puerto USB directo sin hubs intermedios.\n4. Pulsa "Flashear" nuevamente.`
+        );
       } else {
         addToast(`Error al flashear: ${errMsg}`, 'error');
       }
