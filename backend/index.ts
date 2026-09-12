@@ -263,6 +263,13 @@ function handleAdbError(res: express.Response, err: any, defaultMsg: string = 'E
       error: 'Permiso denegado. Esta acción requiere que el dispositivo tenga acceso Root o esté iniciado en Recovery (TWRP).'
     });
   }
+  if (msg.includes('closed') || msg.includes('sideload connection only') || msg.includes('sideload')) {
+    return res.status(503).json({
+      success: false,
+      sideloadMode: true,
+      error: 'El dispositivo está en Modo Sideload / Recovery. Las funciones del sistema Android (apps, sensores, batería, info completa) requieren que Android esté encendido normalmente con depuración USB.'
+    });
+  }
   return res.status(400).json({ success: false, error: `${defaultMsg}: ${msg}` });
 }
 
@@ -295,7 +302,35 @@ app.get('/api/device/:id/info', async (req, res) => {
       });
     }
     // Get device properties using adb shell getprop
-    const { stdout } = await execAsync(`${ADB_PATH} -s ${id} shell getprop`);
+    let stdout = '';
+    try {
+      const resProp = await execAsync(`${ADB_PATH} -s ${id} shell getprop`);
+      stdout = resProp.stdout;
+    } catch (errProp: any) {
+      const emsg = (errProp?.message || String(errProp)).toLowerCase();
+      if (emsg.includes('closed') || emsg.includes('sideload') || emsg.includes('recovery')) {
+        return res.json({
+          success: true,
+          data: {
+            model: 'Dispositivo Android (Modo Sideload / Recovery)',
+            brand: 'Genérico / Recovery',
+            manufacturer: 'Android Recovery',
+            device: 'Modo Sideload',
+            board: 'Recovery',
+            hardware: 'USB Sideload',
+            androidVersion: 'Modo Recovery / Sideload',
+            sdkVersion: 'N/A',
+            securityPatch: 'N/A',
+            resolution: 'N/A',
+            density: 'N/A',
+            imei: 'N/A (Modo Recovery)',
+            serial: id,
+            isSideload: true
+          }
+        });
+      }
+      throw errProp;
+    }
     
     // Parse the output to JSON
     const props: Record<string, string> = {};
@@ -385,21 +420,36 @@ app.get('/api/device/:id/battery', async (req, res) => {
         }
       });
     }
-    const { stdout } = await execAsync(`${ADB_PATH} -s ${id} shell dumpsys battery`);
-    
-    const batteryInfo: Record<string, string> = {};
-    const lines = stdout.split('\n');
-    for (const line of lines) {
-      const parts = line.trim().split(': ');
-      if (parts.length === 2) {
-        batteryInfo[parts[0]] = parts[1];
+    try {
+      const { stdout } = await execAsync(`${ADB_PATH} -s ${id} shell dumpsys battery`);
+      
+      const batteryInfo: Record<string, string> = {};
+      const lines = stdout.split('\n');
+      for (const line of lines) {
+        const parts = line.trim().split(': ');
+        if (parts.length === 2) {
+          batteryInfo[parts[0]] = parts[1];
+        }
       }
+      
+      res.json({
+        success: true,
+        data: batteryInfo
+      });
+    } catch (errDump: any) {
+      const emsg = (errDump?.message || String(errDump)).toLowerCase();
+      if (emsg.includes('closed') || emsg.includes('sideload')) {
+        return res.json({
+          success: true,
+          data: {
+            level: 'N/A',
+            status: 'Conectado (Modo Sideload / Recovery)',
+            health: 'N/A'
+          }
+        });
+      }
+      throw errDump;
     }
-    
-    res.json({
-      success: true,
-      data: batteryInfo
-    });
   } catch (err: any) {
     handleAdbError(res, err, 'Error al obtener estado de batería');
   }
@@ -557,7 +607,17 @@ app.get('/api/device/:id/sensors', async (req, res) => {
     if (isOdinDevice(id)) {
       return res.json({ success: true, sensors: [] });
     }
-    const { stdout } = await execAsync(`${ADB_PATH} -s ${id} shell dumpsys sensorservice`);
+    let stdout = '';
+    try {
+      const resSens = await execAsync(`${ADB_PATH} -s ${id} shell dumpsys sensorservice`);
+      stdout = resSens.stdout;
+    } catch (errSens: any) {
+      const emsg = (errSens?.message || String(errSens)).toLowerCase();
+      if (emsg.includes('closed') || emsg.includes('sideload')) {
+        return res.json({ success: true, sensors: [] });
+      }
+      throw errSens;
+    }
     
     // Parse the dumpsys output to find the "Sensor List:" section
     const lines = stdout.split('\n');
@@ -603,10 +663,22 @@ app.get('/api/device/:id/apps', async (req, res) => {
       return res.json({ success: true, apps: [] });
     }
     
-    const { stdout: sysOut } = await execAsync(`${ADB_PATH} -s ${id} shell pm list packages -s`);
-    const systemApps = sysOut.split('\n').map(line => line.replace('package:', '').trim()).filter(line => line.length > 0);
+    let sysOut = '';
+    let usrOut = '';
+    try {
+      const resSys = await execAsync(`${ADB_PATH} -s ${id} shell pm list packages -s`);
+      const resUsr = await execAsync(`${ADB_PATH} -s ${id} shell pm list packages -3`);
+      sysOut = resSys.stdout;
+      usrOut = resUsr.stdout;
+    } catch (errApp: any) {
+      const emsg = (errApp?.message || String(errApp)).toLowerCase();
+      if (emsg.includes('closed') || emsg.includes('sideload')) {
+        return res.json({ success: true, apps: [] });
+      }
+      throw errApp;
+    }
 
-    const { stdout: usrOut } = await execAsync(`${ADB_PATH} -s ${id} shell pm list packages -3`);
+    const systemApps = sysOut.split('\n').map(line => line.replace('package:', '').trim()).filter(line => line.length > 0);
     const userApps = usrOut.split('\n').map(line => line.replace('package:', '').trim()).filter(line => line.length > 0);
 
     const apps: any[] = [];
@@ -3379,13 +3451,20 @@ app.post('/api/odin/reboot-download', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Se requiere ID de dispositivo' });
   }
   try {
-    await execAsync(`"${ADB_PATH}" -s ${id} reboot download`);
+    try {
+      await execAsync(`"${ADB_PATH}" -s ${id} reboot download`);
+    } catch (err1) {
+      await execAsync(`"${ADB_PATH}" -s ${id} reboot bootloader`);
+    }
     res.json({
       success: true,
       message: 'Comando enviado: El dispositivo se está reiniciando en Modo Descarga (Odin Mode)'
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(400).json({
+      success: false,
+      error: `No se pudo reiniciar automáticamente vía ADB (${err.message}). Si el equipo está en modo Sideload/Recovery o apagado, ponlo manualmente en Modo Descarga:\n1. Apaga el teléfono.\n2. Mantén presionados al mismo tiempo [Volumen Abajo + Home + Encendido].\n3. Cuando aparezca la pantalla de advertencia ("Warning"), pulsa [Volumen Arriba] para continuar a Modo Descarga.`
+    });
   }
 });
 
@@ -3755,7 +3834,6 @@ async function executeHeimdallFlash(
   shouldRepartition: boolean,
   log: (msg: string) => void
 ): Promise<string> {
-  // 1. Verify download mode
   try {
     const { stdout: detOut } = await execAsync(`"${HEIMDALL_PATH}" detect`);
     if (!detOut.toLowerCase().includes('device detected')) {
@@ -3763,7 +3841,7 @@ async function executeHeimdallFlash(
     }
     log('Dispositivo Samsung en Modo Descarga detectado.');
   } catch (e: any) {
-    throw new Error('No se detectó el dispositivo en Modo Descarga. Conecta el cable en Modo Odin.');
+    throw new Error('No se detectó el dispositivo Samsung en Modo Descarga (Odin Mode). Para flashear con Heimdall, el teléfono debe mostrar la pantalla verde/azul "Downloading... Do not turn off target". Ponlo manualmente en Modo Descarga: Apaga el teléfono, mantén pulsados [Volumen Abajo + Home + Encendido] y luego pulsa [Volumen Arriba].');
   }
 
   // Priorizar paquete CSC primero ya que suele contener la tabla de particiones .PIT del firmware

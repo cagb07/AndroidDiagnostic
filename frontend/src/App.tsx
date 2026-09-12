@@ -28,6 +28,8 @@ interface DeviceInfo {
   resolution?: string;
   density?: string;
   imei?: string;
+  isSideload?: boolean;
+  state?: string;
   rawProperties?: Record<string, string>;
 }
 
@@ -155,6 +157,7 @@ function App() {
   const [confirmState, setConfirmState] = useState<{ message: string; resolve: (val: boolean) => void } | null>(null);
 
   // Nuevas Funciones PRO: Estados
+  const [showUsbGuideModal, setShowUsbGuideModal] = useState(false);
   const [showWirelessModal, setShowWirelessModal] = useState(false);
   const [wirelessMode, setWirelessMode] = useState<'connect' | 'pair' | 'tcpip'>('connect');
   const [wirelessIp, setWirelessIp] = useState('');
@@ -330,7 +333,11 @@ function App() {
   };
 
   const handleSendScreenText = async () => {
-    if (!selectedDevice || !screenKeyboardText) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para interactuar con la pantalla.', 'warning');
+      return;
+    }
+    if (!screenKeyboardText) return;
     setIsSendingScreenText(true);
     try {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/input/text`, { text: screenKeyboardText });
@@ -347,7 +354,10 @@ function App() {
   };
 
   const handleGetClipboard = async () => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para interactuar con el portapapeles.', 'warning');
+      return;
+    }
     setIsClipboardLoading(true);
     try {
       const res = await axios.get(`${API_BASE}/device/${selectedDevice}/clipboard`);
@@ -365,7 +375,10 @@ function App() {
   };
 
   const handleSetClipboard = async () => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para interactuar con el portapapeles.', 'warning');
+      return;
+    }
     try {
       const text = await navigator.clipboard.readText();
       if (!text) {
@@ -382,7 +395,10 @@ function App() {
   };
 
   const runSelfTest = async () => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo Android por USB para ejecutar el Diagnóstico Express.', 'warning');
+      return;
+    }
     setIsRunningSelfTest(true);
     addToast('Ejecutando Diagnóstico Express...', 'info');
     try {
@@ -780,12 +796,14 @@ function App() {
   };
 
   const openReportBuilder = () => {
-    if (!selectedDevice) return;
     setShowReportBuilder(true);
   };
 
   const generateReport = async () => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo Android por USB para compilar el reporte maestro con datos reales', 'warning');
+      return;
+    }
     setShowReportBuilder(false);
     setIsGeneratingReport(true);
     addToast('Recopilando telemetría y generando reporte maestro...', 'info');
@@ -1033,6 +1051,10 @@ function App() {
   };
 
   const handleBulkDeleteFiles = async () => {
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para gestionar archivos.', 'warning');
+      return;
+    }
     if (selectedExplorerFiles.length === 0) return;
     if (await customConfirm(`¿Estás seguro de eliminar permanentemente ${selectedExplorerFiles.length} archivos/carpetas?`)) {
       try {
@@ -1055,7 +1077,13 @@ function App() {
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !selectedDevice || !filesPath) return;
+    if (!file) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para subir archivos.', 'warning');
+      e.target.value = '';
+      return;
+    }
+    if (!filesPath) return;
 
     const formData = new FormData();
     formData.append('file', file);
@@ -1141,7 +1169,10 @@ function App() {
   };
 
   const handleKeyEvent = async (keycode: number) => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para enviar teclas de navegación.', 'warning');
+      return;
+    }
     try {
       await axios.post(`${API_BASE}/device/${selectedDevice}/input`, { action: 'keyevent', keycode });
       logAction('Pantalla (Mirror)', `Keycode: ${keycode}`, 'Enviado');
@@ -1153,7 +1184,10 @@ function App() {
   };
 
   const handleScreenRecordToggle = async () => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para grabar la pantalla.', 'warning');
+      return;
+    }
 
     if (isRecordingVideo) {
       // Detener y descargar
@@ -1186,7 +1220,10 @@ function App() {
   };
 
   const fetchScreenshot = async () => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para capturar la pantalla.', 'warning');
+      return;
+    }
     setIsScreenshotLoading(true);
     try {
       const res = await axios.get(`${API_BASE}/device/${selectedDevice}/screenshot`, { responseType: 'blob' });
@@ -1199,7 +1236,13 @@ function App() {
 
   const runTerminalCommand = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedDevice || !terminalCommand.trim()) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para ejecutar comandos de terminal.', 'warning');
+      setTerminalOutput(prev => prev + `\n$ ${terminalCommand || '(vacío)'}\n[MODO EXPLORACIÓN] Sin dispositivo conectado. Conecta tu teléfono para ejecutar comandos ADB.\n`);
+      setTerminalCommand('');
+      return;
+    }
+    if (!terminalCommand.trim()) return;
     setTerminalOutput(prev => prev + `\n$ ${terminalCommand}\nEjecutando...`);
     const cmd = terminalCommand;
     setTerminalCommand('');
@@ -1219,7 +1262,10 @@ function App() {
   };
 
   const handleGodMode = async (action: string) => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para ejecutar acciones de sistema.', 'warning');
+      return;
+    }
     if (action === 'adguard-dns' && !await customConfirm('¿Estás seguro de inyectar el DNS de AdGuard a nivel sistema? Bloqueará anuncios en todo el dispositivo.')) return;
     try {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/advanced-action`, { action });
@@ -1243,7 +1289,11 @@ function App() {
   };
 
   const runPingTest = async () => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para probar conectividad.', 'warning');
+      setPingResult('Prueba no ejecutada: Sin dispositivo conectado.');
+      return;
+    }
     setPingResult('Haciendo ping a 8.8.8.8...');
     try {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/network/ping`);
@@ -1264,7 +1314,10 @@ function App() {
   };
 
   const killProcess = async (pid: string, packageName?: string) => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para terminar procesos.', 'warning');
+      return;
+    }
     if (!await customConfirm(`¿Estás seguro de forzar el cierre de ${packageName || pid}?`)) return;
     try {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/processes/kill`, { pid, packageName });
@@ -1280,7 +1333,10 @@ function App() {
   };
 
   const handleStressTest = async (type: 'cpu' | 'gpu' | 'video', action: 'start' | 'stop') => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para ejecutar test de estrés térmico.', 'warning');
+      return;
+    }
     console.log(`[STRESS TEST] Iniciando petición - Dispositivo: ${selectedDevice}, Tipo: ${type}, Acción: ${action}`);
     try {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/stress`, { type, action });
@@ -1295,7 +1351,10 @@ function App() {
   };
 
   const applyScreenTweaks = async (action: string, value?: string) => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para modificar resolución o DPI.', 'warning');
+      return;
+    }
     try {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/screen/modifier`, { action, value });
       if (res.data.success) {
@@ -1318,7 +1377,10 @@ function App() {
   };
 
   const setDevToggle = async (key: string, value: string) => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para cambiar opciones de desarrollador.', 'warning');
+      return;
+    }
     try {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/developer-toggles`, { key, value });
       if (res.data.success) {
@@ -1375,8 +1437,18 @@ function App() {
 
   useEffect(() => {
     if (selectedDevice) {
+      const devObj = devices.find(d => d.id === selectedDevice);
+      const isNonStandardMode = selectedDevice === 'SAMSUNG-ODIN-MODE' ||
+                                selectedDevice.includes('ODIN') ||
+                                selectedDevice.includes('DOWNLOAD') ||
+                                devObj?.type === 'download' ||
+                                devObj?.type === 'fastboot' ||
+                                devObj?.type === 'sideload' ||
+                                devObj?.type === 'recovery' ||
+                                devObj?.type === 'unauthorized';
+
       fetchDeviceInfo(selectedDevice);
-      if (selectedDevice === 'SAMSUNG-ODIN-MODE' || selectedDevice.includes('ODIN') || selectedDevice.includes('DOWNLOAD')) {
+      if (isNonStandardMode) {
         return;
       }
       fetchBatteryInfo(selectedDevice);
@@ -1386,7 +1458,7 @@ function App() {
       fetchSecurityAudit();
       fetchImeiAndTelephony();
     }
-  }, [selectedDevice]);
+  }, [selectedDevice, devices]);
 
   // App Info loader
   useEffect(() => {
@@ -1454,7 +1526,10 @@ function App() {
   }, [selectedDevice, activeTab, isLogging]);
 
   const handleReboot = async (mode: string) => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      customAlert('Conecta un dispositivo Android por USB para reiniciar en este modo.', 'warning');
+      return;
+    }
     if (!await customConfirm(`Are you sure you want to reboot to ${mode}?`)) return;
     try {
       await axios.post(`${API_BASE}/device/${selectedDevice}/reboot`, { mode });
@@ -1467,7 +1542,10 @@ function App() {
   };
 
   const handleTest = async (type: string) => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      customAlert('Conecta un dispositivo Android por USB para ejecutar esta prueba de hardware.', 'warning');
+      return;
+    }
     try {
       await axios.post(`${API_BASE}/device/${selectedDevice}/test/${type}`);
       logAction('Hardware Test', `Prueba: ${type}`, 'Iniciada con éxito');
@@ -1478,7 +1556,10 @@ function App() {
   };
 
   const handleUninstallApp = async (app: AppItem) => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      customAlert('Conecta un dispositivo Android para gestionar aplicaciones.', 'warning');
+      return;
+    }
     if (!await customConfirm(`Are you sure you want to uninstall ${app.packageName}? This may break device functionality if it's a critical system app.`)) return;
     try {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/apps/uninstall`, { packageName: app.packageName });
@@ -1495,7 +1576,10 @@ function App() {
   };
 
   const handleDestroyBloatware = async () => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      customAlert('Conecta un dispositivo Android por USB para remover bloatware.', 'warning');
+      return;
+    }
 
     const bloatware = apps.filter(a => a.importance === 4);
     if (bloatware.length === 0) {
@@ -1527,7 +1611,10 @@ function App() {
   };
 
   const handleSpoof = async (type: string, value?: number) => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      customAlert('Conecta un dispositivo Android por USB para inyectar estados de hardware simulados.', 'warning');
+      return;
+    }
     try {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/spoof`, { type, value });
       if (res.data.success) {
@@ -1541,7 +1628,12 @@ function App() {
   };
 
   const handleApkUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!selectedDevice || !e.target.files || e.target.files.length === 0) return;
+    if (!e.target.files || e.target.files.length === 0) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para instalar APKs.', 'warning');
+      e.target.value = '';
+      return;
+    }
     const file = e.target.files[0];
     if (!file.name.endsWith('.apk')) {
       customAlert('Solo se permiten archivos con extensión .apk');
@@ -1569,7 +1661,10 @@ function App() {
   };
 
   const startBackup = async () => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para crear copias de seguridad.', 'warning');
+      return;
+    }
     try {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/backup/legacy`);
       if (res.data.success) {
@@ -1596,7 +1691,10 @@ function App() {
   };
 
   const handleRestoreBackup = async (filename: string) => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para restaurar respaldos.', 'warning');
+      return;
+    }
     if (!await customConfirm('¿Estás seguro de que deseas restaurar esta copia de seguridad? Se requerirá que confirmes la acción en la pantalla del celular.')) return;
     addToast('Restauración iniciada. Por favor, revisa la pantalla del celular y aprueba la restauración.', 'info');
     try {
@@ -1628,7 +1726,10 @@ function App() {
   };
 
   const handleMaintenance = async (action: string) => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para ejecutar tareas de mantenimiento.', 'warning');
+      return;
+    }
     try {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/maintenance/${action}`);
       if (res.data.success) {
@@ -1640,7 +1741,10 @@ function App() {
   };
 
   const handleUnlockBootloader = async () => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB en modo Fastboot para desbloquear el bootloader.', 'warning');
+      return;
+    }
     const isSamsung = selectedBrand === 'samsung' ||
       selectedDevice === 'SAMSUNG-ODIN-MODE' ||
       selectedDevice.includes('ODIN') ||
@@ -1661,7 +1765,10 @@ function App() {
   };
 
   const handleInstallMagisk = async () => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para instalar Magisk.', 'warning');
+      return;
+    }
     setIsInstallingMagisk(true);
     addToast('Descargando e instalando Magisk compatible... Esto puede tardar unos segundos.', 'info');
     try {
@@ -1682,7 +1789,11 @@ function App() {
   };
 
   const handleAutoPatch = async () => {
-    if (!selectedDevice || !autoPatchFile) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para autoparchear boot.img.', 'warning');
+      return;
+    }
+    if (!autoPatchFile) return;
     const isSamsung = selectedBrand === 'samsung' ||
       selectedDevice === 'SAMSUNG-ODIN-MODE' ||
       selectedDevice.includes('ODIN') ||
@@ -1737,7 +1848,10 @@ function App() {
   };
 
   const handleRepairAppAction = async (packageName: string, action: string) => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para reparar aplicaciones.', 'warning');
+      return;
+    }
     if (await customConfirm(`¿Seguro que deseas ejecutar '${action}' en ${packageName}?`)) {
       try {
         const res = await axios.post(`${API_BASE}/device/${selectedDevice}/apps/manage`, { packageName, action });
@@ -1752,7 +1866,10 @@ function App() {
   };
 
   const handlePointerLocationToggle = async (enable: boolean) => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para activar ubicación del puntero.', 'warning');
+      return;
+    }
     try {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/hardware/touch`, { enable });
       if (res.data.success) {
@@ -1764,7 +1881,11 @@ function App() {
   };
 
   const handleNetworkPing = async () => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para ejecutar ping.', 'warning');
+      setRepairPingResult('Prueba no ejecutada: Sin dispositivo conectado.');
+      return;
+    }
     setRepairPingResult('Ejecutando ping...');
     try {
       const res = await axios.get(`${API_BASE}/device/${selectedDevice}/network/ping`);
@@ -1777,7 +1898,10 @@ function App() {
   };
 
   const handleNetworkReset = async () => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para reiniciar conectividad.', 'warning');
+      return;
+    }
     if (await customConfirm('¿Reiniciar componentes de red (activará y desactivará el modo avión)?')) {
       try {
         const res = await axios.post(`${API_BASE}/device/${selectedDevice}/network/reset`);
@@ -1791,7 +1915,11 @@ function App() {
   };
 
   const fetchCrashLogs = async () => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para extraer logs de caídas.', 'warning');
+      setRepairCrashLogs('Conecta un dispositivo para auditar logs de caídas en vivo.');
+      return;
+    }
     setRepairCrashLogs('Extrayendo logs...');
     try {
       const res = await axios.get(`${API_BASE}/device/${selectedDevice}/logs/crash`);
@@ -1804,7 +1932,10 @@ function App() {
   };
 
   const handleHardwareVibrate = async () => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para testear vibración.', 'warning');
+      return;
+    }
     try {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/hardware/vibrate`);
       if (res.data.success) {
@@ -1823,7 +1954,10 @@ function App() {
 
 
   const handleTWRPBypass = async () => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para ejecutar bypass TWRP/Root.', 'warning');
+      return;
+    }
     if (await customConfirm('¿Estás seguro de que quieres eliminar las bases de datos de seguridad? Esto requiere que el dispositivo tenga acceso Root activo o que estés en TWRP.')) {
       try {
         const res = await axios.post(`${API_BASE}/device/${selectedDevice}/bypass/twrp`);
@@ -1839,7 +1973,10 @@ function App() {
   };
 
   const handleBruteForceStart = async () => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para iniciar fuerza bruta PIN.', 'warning');
+      return;
+    }
     try {
       const res = await axios.post(`${API_BASE}/device/${selectedDevice}/bypass/bruteforce/start`, {
         startPin: bruteForceStartPin,
@@ -1856,7 +1993,10 @@ function App() {
   };
 
   const handleBruteForceStop = async () => {
-    if (!selectedDevice) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB para detener la prueba.', 'warning');
+      return;
+    }
     try {
       await axios.post(`${API_BASE}/device/${selectedDevice}/bypass/bruteforce/stop`);
       addToast('Solicitud de detención enviada.', 'info');
@@ -1868,7 +2008,11 @@ function App() {
   };
 
   const handleFlashBoot = async () => {
-    if (!selectedDevice || !bootFile) return;
+    if (!selectedDevice) {
+      addToast('Conecta un dispositivo por USB en modo Fastboot para flashear boot.', 'warning');
+      return;
+    }
+    if (!bootFile) return;
     if (selectedBrand === 'samsung') return customAlert('Samsung requires Odin. Fastboot flash will not work.');
 
     const formData = new FormData();
@@ -2045,8 +2189,7 @@ function App() {
             </button>
             <button
               onClick={triggerTechnicalReportPrint}
-              disabled={!selectedDevice}
-              className="flex items-center space-x-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 px-4 py-2.5 rounded-xl transition-all shadow-[0_0_15px_rgba(59,130,246,0.3)] text-white font-medium border border-blue-400/30 disabled:opacity-50"
+              className="flex items-center space-x-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 px-4 py-2.5 rounded-xl transition-all shadow-[0_0_15px_rgba(59,130,246,0.3)] text-white font-medium border border-blue-400/30"
               title="Imprimir / Exportar Reporte Técnico Formal en PDF"
             >
               <FileText className="w-4 h-4" />
@@ -2054,7 +2197,7 @@ function App() {
             </button>
             <button
               onClick={openReportBuilder}
-              disabled={isGeneratingReport || !selectedDevice}
+              disabled={isGeneratingReport}
               className="flex items-center space-x-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 px-4 py-2.5 rounded-xl transition-all shadow-[0_0_15px_rgba(168,85,247,0.4)] text-white font-medium border border-purple-400/30 disabled:opacity-50"
             >
               <Printer className={`w-4 h-4 ${isGeneratingReport ? 'animate-pulse' : ''}`} />
@@ -2071,76 +2214,20 @@ function App() {
           </div>
         </header>
 
-        {devices.length === 0 ? (
-          <div className="space-y-6">
-            <div className="flex flex-col items-center justify-center py-12 bg-slate-900/50 backdrop-blur-md rounded-3xl border border-slate-700/50 shadow-2xl">
-              <Smartphone className="w-16 h-16 text-slate-500 mb-4 animate-bounce" />
-              <p className="text-slate-300 text-2xl font-bold">No hay dispositivos conectados</p>
-              <p className="text-slate-500 mt-2 text-center max-w-md">Para utilizar MoniRemo, necesitas conectar tu dispositivo mediante un cable USB y habilitar la Depuración USB.</p>
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
+          {/* Device Selector Sidebar */}
+          <div className="space-y-4 lg:col-span-1">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Dispositivo</h3>
+              {devices.length === 0 && (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30 font-mono">
+                  Modo Exploración
+                </span>
+              )}
             </div>
 
-            <div className="bg-slate-800/40 border border-slate-700/50 rounded-3xl p-8 backdrop-blur-xl shadow-xl">
-              <h3 className="text-2xl font-bold text-slate-100 mb-6 flex items-center"><Unlock className="w-6 h-6 mr-3 text-blue-400" /> Cómo activar la Depuración USB (ADB)</h3>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-
-                <div className="bg-slate-900/60 p-5 rounded-2xl border border-slate-700/50 flex flex-col">
-                  <h4 className="font-bold text-blue-400 mb-3 text-lg">🌐 Paso Universal</h4>
-                  <ol className="list-decimal list-inside text-sm text-slate-300 space-y-2 flex-1">
-                    <li>Ve a <strong>Ajustes</strong> &gt; <strong>Acerca del teléfono</strong>.</li>
-                    <li>Busca <strong>Número de compilación</strong> (Build Number).</li>
-                    <li>Toca rápidamente ese texto <strong>7 veces</strong> seguidas.</li>
-                    <li>El sistema te dirá "¡Ya eres desarrollador!".</li>
-                    <li>Vuelve atrás, busca <strong>Opciones de desarrollador</strong> y activa <strong>Depuración USB</strong>.</li>
-                  </ol>
-                </div>
-
-                <div className="bg-slate-900/60 p-5 rounded-2xl border border-slate-700/50 flex flex-col">
-                  <h4 className="font-bold text-orange-400 mb-3 text-lg">📱 Xiaomi / POCO</h4>
-                  <ol className="list-decimal list-inside text-sm text-slate-300 space-y-2 flex-1">
-                    <li>Ve a <strong>Ajustes</strong> &gt; <strong>Sobre el teléfono</strong>.</li>
-                    <li>Toca 7 veces en <strong>Versión MIUI / HyperOS</strong>.</li>
-                    <li>Ve a <strong>Ajustes adicionales</strong> &gt; <strong>Opciones de desarrollador</strong>.</li>
-                    <li>Activa <strong>Depuración USB</strong>.</li>
-                    <li className="text-orange-300 font-semibold mt-2 list-none">Importante: Activa también "Depuración USB (Ajustes de seguridad)" para poder borrar bloatware.</li>
-                  </ol>
-                </div>
-
-                <div className="bg-slate-900/60 p-5 rounded-2xl border border-slate-700/50 flex flex-col">
-                  <h4 className="font-bold text-indigo-400 mb-3 text-lg">✨ Samsung Galaxy</h4>
-                  <ol className="list-decimal list-inside text-sm text-slate-300 space-y-2 flex-1">
-                    <li>Ve a <strong>Ajustes</strong> &gt; <strong>Acerca del teléfono</strong> &gt; <strong>Información de software</strong>.</li>
-                    <li>Toca 7 veces en <strong>Número de compilación</strong>.</li>
-                    <li>Vuelve a la pantalla principal de Ajustes, baja hasta el final y entra en <strong>Opciones de desarrollador</strong>.</li>
-                    <li>Activa <strong>Depuración USB</strong>.</li>
-                  </ol>
-                </div>
-
-                <div className="bg-slate-900/60 p-5 rounded-2xl border border-slate-700/50 flex flex-col">
-                  <h4 className="font-bold text-teal-400 mb-3 text-lg">⚡ Motorola / Pixel</h4>
-                  <ol className="list-decimal list-inside text-sm text-slate-300 space-y-2 flex-1">
-                    <li>Ve a <strong>Ajustes</strong> &gt; <strong>Acerca del teléfono</strong>.</li>
-                    <li>Baja del todo y toca 7 veces en <strong>Número de compilación</strong>.</li>
-                    <li>Ve a <strong>Sistema</strong> &gt; <strong>Opciones avanzadas</strong> &gt; <strong>Opciones de para desarrolladores</strong>.</li>
-                    <li>Activa <strong>Depuración USB</strong>.</li>
-                  </ol>
-                </div>
-              </div>
-
-              <div className="mt-8 bg-blue-900/20 border border-blue-500/30 p-4 rounded-xl flex items-start space-x-3">
-                <AlertCircle className="w-6 h-6 text-blue-400 shrink-0 mt-0.5" />
-                <p className="text-sm text-slate-300 leading-relaxed">
-                  <strong>Paso Final:</strong> Una vez activada la opción, conecta el teléfono por cable a la computadora. En la pantalla de tu celular aparecerá un mensaje preguntando: <em>"¿Permitir depuración USB desde esta computadora?"</em>. Selecciona <strong>"Permitir siempre"</strong> y presiona OK. Luego, haz clic en el botón "Actualizar Dispositivos".
-                </p>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
-            {/* Device Selector Sidebar */}
-            <div className="space-y-4 lg:col-span-1">
-              <h3 className="text-xs font-bold mb-4 text-slate-500 uppercase tracking-widest">Dispositivos Conectados</h3>
-              {devices.map((device) => (
+            {devices.length > 0 ? (
+              devices.map((device) => (
                 <div
                   key={device.id}
                   onClick={() => setSelectedDevice(device.id)}
@@ -2157,12 +2244,99 @@ function App() {
                     </div>
                   </div>
                 </div>
-              ))}
-            </div>
+              ))
+            ) : (
+              <div className="p-5 rounded-2xl bg-slate-900/60 border border-dashed border-slate-700/80 shadow-lg text-center space-y-4">
+                <div className="w-12 h-12 mx-auto rounded-full bg-slate-800/80 border border-slate-700 flex items-center justify-center text-slate-400">
+                  <Smartphone className="w-6 h-6" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-slate-200">Sin Dispositivo Conectado</p>
+                  <p className="text-xs text-slate-500 mt-1">Exploración de funciones activa</p>
+                </div>
+                <div className="pt-2 flex flex-col gap-2">
+                  <button
+                    onClick={fetchDevices}
+                    disabled={loading}
+                    className="w-full py-2.5 px-3 rounded-xl bg-blue-600/20 hover:bg-blue-600 text-blue-400 hover:text-white border border-blue-500/30 font-bold text-xs transition-all flex items-center justify-center gap-2"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+                    <span>Buscar Dispositivos</span>
+                  </button>
+                  <button
+                    onClick={() => setShowUsbGuideModal(true)}
+                    className="w-full py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-600 font-bold text-xs transition-all flex items-center justify-center gap-2"
+                  >
+                    <Unlock className="w-3.5 h-3.5 text-blue-400" />
+                    <span>Guía Activar USB</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
 
-            {/* Dynamic Content */}
-            {selectedDevice && (
-              <div className="lg:col-span-3 space-y-6">
+          {/* Dynamic Content */}
+          <div className="lg:col-span-3 space-y-6">
+            {!selectedDevice && (
+              <div className="p-4 rounded-2xl bg-gradient-to-r from-blue-950/40 via-indigo-950/30 to-purple-950/40 border border-blue-500/30 backdrop-blur-md shadow-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="flex items-center space-x-3">
+                  <div className="p-2.5 bg-blue-500/20 rounded-xl border border-blue-400/30 text-blue-400 shrink-0">
+                    <Info className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                      Modo Exploración Activo
+                      <span className="text-[10px] bg-blue-500/20 text-blue-300 px-2 py-0.5 rounded-full font-mono uppercase border border-blue-500/30">
+                        Todas las funciones desbloqueadas
+                      </span>
+                    </h4>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Puedes navegar por todas las herramientas y revisar sus opciones. Conecta un dispositivo con Depuración USB para ejecutar acciones en vivo.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowUsbGuideModal(true)}
+                  className="whitespace-nowrap px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs transition-all shadow-md flex items-center gap-1.5 shrink-0"
+                >
+                  <Unlock className="w-3.5 h-3.5" />
+                  <span>Ver Guía USB</span>
+                </button>
+              </div>
+            )}
+                {(() => {
+                  const currentDev = devices.find(d => d.id === selectedDevice);
+                  if (currentDev?.type === 'sideload' || deviceInfo?.isSideload) {
+                    return (
+                      <div className="p-5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-200 shadow-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                        <div className="flex items-start space-x-3">
+                          <div className="p-2.5 bg-amber-500/20 rounded-xl border border-amber-500/40 text-amber-400 mt-0.5">
+                            <Zap className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4 className="font-bold text-amber-300 text-base flex items-center gap-2">
+                              Dispositivo en Modo Sideload / Recovery
+                              <span className="text-[10px] bg-amber-500/30 text-amber-200 px-2 py-0.5 rounded-full font-mono uppercase">Recovery</span>
+                            </h4>
+                            <p className="text-xs text-amber-200/80 mt-1 max-w-2xl leading-relaxed">
+                              El dispositivo no está ejecutando el sistema Android completo, sino el menú de Recuperación (Recovery / Sideload).
+                              Las funciones de diagnóstico de hardware (batería, aplicaciones, sensores) no están disponibles en este modo.
+                              Para flashear firmware Samsung oficial (.tar.md5), debes reiniciar el equipo en <strong>Modo Descarga (Odin / Download Mode)</strong>.
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={handleOdinRebootDownload}
+                          disabled={isOdinRebooting}
+                          className="whitespace-nowrap px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition-all shadow-md disabled:opacity-50"
+                        >
+                          {isOdinRebooting ? 'Reiniciando...' : 'Reiniciar a Download'}
+                        </button>
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
 
                 {/* TAB RENDERING WITH FRAMER MOTION */}
                 <AnimatePresence mode="wait">
@@ -2334,6 +2508,59 @@ function App() {
                                 <p className="text-sm font-mono text-slate-300 break-all">{deviceInfo.fingerprint || 'Desconocida'}</p>
                               </div>
                             </div>
+                          ) : !selectedDevice ? (
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-6 relative z-10">
+                              <div className="bg-slate-800/50 p-5 rounded-2xl border border-slate-700/50">
+                                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-1">Fabricante</p>
+                                <p className="text-xl font-bold text-slate-500">--</p>
+                              </div>
+                              <div className="bg-slate-800/50 p-5 rounded-2xl border border-slate-700/50">
+                                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-1">Modelo</p>
+                                <p className="text-xl font-bold text-slate-500">--</p>
+                              </div>
+                              <div className="bg-slate-800/50 p-5 rounded-2xl border border-slate-700/50">
+                                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-1">Versión Android</p>
+                                <p className="text-xl font-bold text-slate-500">--</p>
+                              </div>
+                              <div className="bg-slate-800/50 p-5 rounded-2xl border border-slate-700/50">
+                                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-1">Parche Seguridad</p>
+                                <p className="text-xl font-bold text-slate-500">--</p>
+                              </div>
+                              <div className="bg-slate-800/50 p-5 rounded-2xl border border-slate-700/50">
+                                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-1">Número de Serie</p>
+                                <p className="text-xl font-bold text-slate-500 font-mono">--</p>
+                              </div>
+                              <div className="bg-slate-800/50 p-5 rounded-2xl border border-slate-700/50">
+                                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-1">Hardware / Placa</p>
+                                <p className="text-xl font-bold text-slate-500">--</p>
+                              </div>
+                              <div className="bg-slate-800/50 p-5 rounded-2xl border border-slate-700/50">
+                                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-1">Resolución / DPI</p>
+                                <p className="text-xl font-bold text-slate-500">--</p>
+                              </div>
+                              <div className="bg-slate-800/50 p-5 rounded-2xl border border-slate-700/50">
+                                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-1">Arquitectura (ABI)</p>
+                                <p className="text-xl font-bold text-slate-500">--</p>
+                              </div>
+                              <div className="bg-slate-800/50 p-5 rounded-2xl border border-slate-700/50 md:col-span-2">
+                                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-1">Bootloader</p>
+                                <p className="text-xl font-bold text-slate-500">--</p>
+                              </div>
+                              <div className="bg-slate-800/50 p-5 rounded-2xl border border-slate-700/50 md:col-span-2">
+                                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-1">IMEI (Identidad del Equipo)</p>
+                                <p className="text-xl font-bold text-slate-500 font-mono">--</p>
+                              </div>
+                              <div className="bg-slate-800/50 p-5 rounded-2xl border border-slate-700/50 md:col-span-4">
+                                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-1">Banda Base (Baseband)</p>
+                                <p className="text-lg font-bold text-slate-500">--</p>
+                              </div>
+                              <div className="bg-slate-800/50 p-5 rounded-2xl border border-slate-700/50 md:col-span-4">
+                                <div className="flex justify-between items-center mb-1">
+                                  <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Huella de Compilación (Fingerprint)</p>
+                                </div>
+                                <p className="text-sm font-mono text-slate-500 italic">Conecta un dispositivo USB para leer especificaciones y propiedades del sistema.</p>
+                              </div>
+                            </div>
                           ) : (
                             <div className="animate-pulse flex space-x-4"><div className="h-10 bg-slate-700 rounded w-full"></div></div>
                           )}
@@ -2363,6 +2590,21 @@ function App() {
                                 <p className="text-3xl font-black text-white capitalize drop-shadow-md">
                                   {batteryInfo['health'] === '2' ? 'Buena' : 'Desconocida'}
                                 </p>
+                              </div>
+                            </div>
+                          ) : !selectedDevice ? (
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 relative z-10">
+                              <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700/50 flex flex-col items-center justify-center text-center">
+                                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">Nivel de Carga</p>
+                                <p className="text-4xl font-black text-slate-500">--%</p>
+                              </div>
+                              <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700/50 flex flex-col items-center justify-center text-center">
+                                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">Temperatura</p>
+                                <p className="text-4xl font-black text-slate-500">--°C</p>
+                              </div>
+                              <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700/50 flex flex-col items-center justify-center text-center">
+                                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">Salud</p>
+                                <p className="text-3xl font-black text-slate-500">--</p>
                               </div>
                             </div>
                           ) : (
@@ -2436,6 +2678,21 @@ function App() {
                                 </div>
                               </div>
 
+                            </div>
+                          ) : !selectedDevice ? (
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 relative z-10">
+                              <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700/50">
+                                <h4 className="font-bold text-cyan-400 flex items-center mb-4"><Cpu className="w-5 h-5 mr-2" /> Carga de Procesador (Top)</h4>
+                                <p className="text-slate-500 text-sm">Conecta un dispositivo para monitorizar subprocesos de CPU.</p>
+                              </div>
+                              <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700/50">
+                                <h4 className="font-bold text-purple-400 flex items-center mb-4"><Database className="w-5 h-5 mr-2" /> Uso de Particiones</h4>
+                                <p className="text-slate-500 text-sm">Conecta un dispositivo para auditar /system, /data y /vendor.</p>
+                              </div>
+                              <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700/50 flex flex-col justify-center">
+                                <h4 className="font-bold text-red-400 flex items-center mb-4"><Thermometer className="w-5 h-5 mr-2" /> Temperatura General</h4>
+                                <p className="text-slate-500 text-sm">Conecta un dispositivo para leer sensores térmicos de placa base.</p>
+                              </div>
                             </div>
                           ) : (
                             <div className="animate-pulse flex space-x-4"><div className="h-24 bg-slate-700 rounded-2xl w-full"></div></div>
@@ -2558,6 +2815,12 @@ function App() {
                                 </div>
                               ))}
                             </div>
+                          ) : !selectedDevice ? (
+                            <div className="flex flex-col items-center justify-center py-12 text-slate-400">
+                              <Activity className="w-10 h-10 mb-3 text-slate-600" />
+                              <p className="font-semibold text-base text-slate-300">Sin sensores detectados</p>
+                              <p className="text-xs text-slate-500 mt-1 max-w-sm text-center">Conecta un dispositivo Android por USB con depuración habilitada para listar acelerómetro, giroscopio, luz ambiental y más.</p>
+                            </div>
                           ) : (
                             <div className="flex flex-col items-center justify-center py-12 text-slate-500">
                               <RefreshCw className="w-10 h-10 mb-4 animate-spin text-blue-500/50" />
@@ -2659,7 +2922,13 @@ function App() {
                                   </span>
                                 </div>
                               </div>
-                            )) : (
+                            )) : !selectedDevice ? (
+                              <div className="col-span-full py-16 text-center">
+                                <LayoutGrid className="w-12 h-12 mx-auto mb-3 text-slate-600" />
+                                <p className="text-slate-300 font-semibold">Sin lista de aplicaciones</p>
+                                <p className="text-slate-500 text-xs mt-1">Conecta un dispositivo para auditar paquetes de usuario y sistema, extraer APKs o congelar bloatware.</p>
+                              </div>
+                            ) : (
                               <div className="col-span-full animate-pulse flex flex-col space-y-3">
                                 <div className="h-24 bg-slate-800/50 rounded-2xl w-full"></div>
                                 <div className="h-24 bg-slate-800/50 rounded-2xl w-full"></div>
@@ -4804,8 +5073,20 @@ function App() {
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-slate-800 font-mono">
-                                {filesList.map((f, i) => (
-                                  <tr key={i} className="hover:bg-slate-800/50 transition-colors group">
+                                {filesList.length === 0 ? (
+                                  <tr>
+                                    <td colSpan={6} className="py-12 text-center text-slate-500 font-sans">
+                                      <FolderOpen className="w-12 h-12 mx-auto mb-3 text-slate-600 opacity-50" />
+                                      <p className="text-sm font-semibold text-slate-400">
+                                        {!selectedDevice
+                                          ? 'Modo Exploración: Conecta un dispositivo por USB para explorar el almacenamiento interno (/sdcard)'
+                                          : 'No hay archivos en este directorio'}
+                                      </p>
+                                    </td>
+                                  </tr>
+                                ) : (
+                                  filesList.map((f, i) => (
+                                    <tr key={i} className="hover:bg-slate-800/50 transition-colors group">
                                     <td className="px-4 py-3">
                                       <input
                                         type="checkbox"
@@ -4861,7 +5142,8 @@ function App() {
                                       }} className="p-1.5 text-red-400 hover:bg-red-500/20 rounded opacity-0 group-hover:opacity-100 transition-all"><Trash2 className="w-4 h-4" /></button>
                                     </td>
                                   </tr>
-                                ))}
+                                  ))
+                                )}
                               </tbody>
                             </table>
                           </div>
@@ -4927,7 +5209,17 @@ function App() {
                               </div>
                             </>
                           ) : (
-                            <div className="w-full h-full flex items-center justify-center text-slate-600">Haz clic en Captura Manual o En Vivo</div>
+                            <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center">
+                              <MonitorPlay className="w-12 h-12 text-slate-700 mb-3" />
+                              <p className="text-sm font-medium text-slate-400 mb-1">
+                                {!selectedDevice ? 'Modo Exploración Activo' : 'Pantalla Inactiva'}
+                              </p>
+                              <p className="text-xs text-slate-500 max-w-[220px]">
+                                {!selectedDevice
+                                  ? 'Conecta un dispositivo por USB para transmitir y controlar en tiempo real'
+                                  : 'Haz clic en Foto Manual o activa el modo En Vivo para ver la pantalla'}
+                              </p>
+                            </div>
                           )}
                         </div>
 
@@ -5012,7 +5304,23 @@ function App() {
                         </div>
 
                         {!permissionsData ? (
-                          <div className="animate-pulse bg-slate-800 h-64 rounded-2xl w-full"></div>
+                          !selectedDevice ? (
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 relative z-10">
+                              {['CAMERA', 'RECORD_AUDIO', 'FINE_LOCATION'].map(perm => (
+                                <div key={perm} className="bg-slate-800/60 p-5 rounded-2xl border border-slate-700/50">
+                                  <h4 className="font-bold text-rose-400 mb-4 flex items-center border-b border-slate-700 pb-3">
+                                    {perm === 'CAMERA' ? <Camera className="w-5 h-5 mr-2" /> : perm === 'RECORD_AUDIO' ? <Volume2 className="w-5 h-5 mr-2" /> : <MonitorPlay className="w-5 h-5 mr-2" />}
+                                    Acceso a {perm.replace('_', ' ')}
+                                  </h4>
+                                  <div className="py-12 text-center text-slate-500 text-xs">
+                                    Conecta un dispositivo para auditar permisos de {perm.toLowerCase()}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="animate-pulse bg-slate-800 h-64 rounded-2xl w-full"></div>
+                          )
                         ) : (
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 relative z-10">
                             {['CAMERA', 'RECORD_AUDIO', 'FINE_LOCATION'].map(perm => (
@@ -5063,6 +5371,18 @@ function App() {
                                   <p className="text-lg font-mono text-slate-300">{networkData.mac}</p>
                                 </div>
                               </div>
+                            ) : !selectedDevice ? (
+                              <div className="space-y-4">
+                                <div>
+                                  <p className="text-xs text-slate-500 uppercase font-bold tracking-wider">Dirección IP (WLAN)</p>
+                                  <p className="text-2xl font-mono text-slate-500">--.--.--.--</p>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-slate-500 uppercase font-bold tracking-wider">Dirección MAC</p>
+                                  <p className="text-lg font-mono text-slate-500">--:--:--:--:--:--</p>
+                                </div>
+                                <p className="text-xs text-slate-500 italic mt-2">Conecta un dispositivo para auditar adaptadores de red.</p>
+                              </div>
                             ) : (
                               <p className="text-slate-500 animate-pulse font-mono">Cargando datos de red...</p>
                             )}
@@ -5101,7 +5421,11 @@ function App() {
                               </thead>
                               <tbody className="divide-y divide-slate-800 font-mono">
                                 {processesData.length === 0 ? (
-                                  <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-500 animate-pulse">Obteniendo datos de procesos...</td></tr>
+                                  !selectedDevice ? (
+                                    <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-500">Conecta un dispositivo por USB para monitorizar procesos en tiempo real.</td></tr>
+                                  ) : (
+                                    <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-500 animate-pulse">Obteniendo datos de procesos...</td></tr>
+                                  )
                                 ) : (
                                   processesData.map((proc, idx) => (
                                     <tr key={idx} className="hover:bg-slate-800/50 transition-colors">
@@ -5178,7 +5502,57 @@ function App() {
                         </div>
 
                         {!deepInfo ? (
-                          <div className="animate-pulse bg-slate-800/50 h-64 rounded-2xl w-full border border-slate-700/50"></div>
+                          !selectedDevice ? (
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 relative z-10">
+                              {/* ALMACENAMIENTO */}
+                              <div className="bg-[#030712]/80 backdrop-blur-md p-6 rounded-2xl border border-cyan-900/50 shadow-[inset_0_0_20px_rgba(6,182,212,0.05)]">
+                                <h4 className="text-cyan-300 font-bold mb-4 flex items-center uppercase tracking-widest text-sm border-b border-cyan-900/50 pb-2"><HardDriveDownload className="w-4 h-4 mr-2" /> Storage (/data)</h4>
+                                <div className="space-y-4">
+                                  <div className="flex justify-between text-xs text-slate-500 mb-1">
+                                    <span>Ocupado (--)</span>
+                                    <span>Libre (--)</span>
+                                  </div>
+                                  <div className="w-full bg-slate-800 rounded-full h-3 border border-slate-700 overflow-hidden relative">
+                                    <div className="bg-slate-700 h-3 rounded-full" style={{ width: '0%' }}></div>
+                                  </div>
+                                  <p className="text-center text-xs text-slate-500 mt-2 font-mono">Conecta un dispositivo para leer espacio</p>
+                                </div>
+                              </div>
+
+                              {/* RAM EXTREMA */}
+                              <div className="bg-[#030712]/80 backdrop-blur-md p-6 rounded-2xl border border-cyan-900/50 shadow-[inset_0_0_20px_rgba(6,182,212,0.05)]">
+                                <h4 className="text-cyan-300 font-bold mb-4 flex items-center uppercase tracking-widest text-sm border-b border-cyan-900/50 pb-2"><Cpu className="w-4 h-4 mr-2" /> RAM Física Absoluta</h4>
+                                <div className="space-y-4 text-center">
+                                  <p className="text-4xl font-bold text-slate-500 mb-1">-- <span className="text-xl text-slate-600">GB</span></p>
+                                  <p className="text-xs text-slate-500 uppercase tracking-wider">Memoria en Uso</p>
+                                  <p className="text-xs text-slate-500 font-mono border-t border-slate-800 pt-3">Lectura disponible por ADB</p>
+                                </div>
+                              </div>
+
+                              {/* CELULAR E IMEI */}
+                              <div className="bg-[#030712]/80 backdrop-blur-md p-6 rounded-2xl border border-cyan-900/50 shadow-[inset_0_0_20px_rgba(6,182,212,0.05)]">
+                                <h4 className="text-cyan-300 font-bold mb-4 flex items-center uppercase tracking-widest text-sm border-b border-cyan-900/50 pb-2"><Activity className="w-4 h-4 mr-2" /> Celular & Identidad</h4>
+                                <div className="space-y-3">
+                                  <div>
+                                    <p className="text-[10px] text-slate-500 uppercase tracking-wider">Identificador IMEI</p>
+                                    <p className="text-sm font-mono text-slate-500 bg-slate-900/50 p-2 rounded border border-slate-800 mt-1">-----------------</p>
+                                  </div>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <div>
+                                      <p className="text-[10px] text-slate-500 uppercase tracking-wider">Estado SIM</p>
+                                      <p className="text-sm font-bold text-slate-500">--</p>
+                                    </div>
+                                    <div>
+                                      <p className="text-[10px] text-slate-500 uppercase tracking-wider">Red (Carrier)</p>
+                                      <p className="text-sm font-bold text-slate-500">--</p>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="animate-pulse bg-slate-800/50 h-64 rounded-2xl w-full border border-slate-700/50"></div>
+                          )
                         ) : (
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 relative z-10">
                             {/* ALMACENAMIENTO */}
@@ -5645,7 +6019,13 @@ function App() {
                                     </button>
                                   </div>
                                 </div>
-                              )) : (
+                              )) : !selectedDevice ? (
+                                <div className="text-center py-8 text-slate-500">
+                                  <LayoutGrid className="w-8 h-8 mx-auto mb-3 text-slate-600" />
+                                  <p className="text-slate-400 font-medium">Sin aplicaciones cargadas</p>
+                                  <p className="text-xs text-slate-600 mt-1">Conecta un teléfono por USB para administrar o reparar paquetes de usuario y sistema.</p>
+                                </div>
+                              ) : (
                                 <div className="text-center py-8 text-slate-500">
                                   <RefreshCw className="w-8 h-8 mx-auto mb-3 animate-spin opacity-50" />
                                   <p>Cargando lista de aplicaciones...</p>
@@ -5660,10 +6040,97 @@ function App() {
                   </motion.div>
                 </AnimatePresence>
               </div>
-            )}
+            </div>
+          </main>
+
+      {/* USB DEBUGGING GUIDE MODAL */}
+      {showUsbGuideModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-700/50 rounded-3xl w-full max-w-5xl p-6 sm:p-8 shadow-2xl relative overflow-hidden my-8 max-h-[90vh] overflow-y-auto custom-scrollbar">
+            <div className="absolute top-0 right-0 w-80 h-80 bg-blue-500/10 rounded-full blur-3xl pointer-events-none"></div>
+
+            <div className="relative z-10">
+              <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
+                <div className="flex items-center space-x-3">
+                  <div className="p-3 bg-blue-500/20 rounded-xl text-blue-400">
+                    <Unlock className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-2xl font-bold text-white">Cómo activar la Depuración USB (ADB)</h3>
+                    <p className="text-xs text-slate-400">Guía rápida por fabricante para habilitar comunicación ADB</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowUsbGuideModal(false)}
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                <div className="bg-slate-950/60 p-5 rounded-2xl border border-slate-800 flex flex-col">
+                  <h4 className="font-bold text-blue-400 mb-3 text-base flex items-center gap-2">🌐 Paso Universal</h4>
+                  <ol className="list-decimal list-inside text-xs text-slate-300 space-y-2 flex-1">
+                    <li>Ve a <strong>Ajustes</strong> &gt; <strong>Acerca del teléfono</strong>.</li>
+                    <li>Busca <strong>Número de compilación</strong> (Build Number).</li>
+                    <li>Toca rápidamente ese texto <strong>7 veces</strong> seguidas.</li>
+                    <li>El sistema te dirá "¡Ya eres desarrollador!".</li>
+                    <li>Vuelve atrás, busca <strong>Opciones de desarrollador</strong> y activa <strong>Depuración USB</strong>.</li>
+                  </ol>
+                </div>
+
+                <div className="bg-slate-950/60 p-5 rounded-2xl border border-slate-800 flex flex-col">
+                  <h4 className="font-bold text-orange-400 mb-3 text-base flex items-center gap-2">📱 Xiaomi / POCO</h4>
+                  <ol className="list-decimal list-inside text-xs text-slate-300 space-y-2 flex-1">
+                    <li>Ve a <strong>Ajustes</strong> &gt; <strong>Sobre el teléfono</strong>.</li>
+                    <li>Toca 7 veces en <strong>Versión MIUI / HyperOS</strong>.</li>
+                    <li>Ve a <strong>Ajustes adicionales</strong> &gt; <strong>Opciones de desarrollador</strong>.</li>
+                    <li>Activa <strong>Depuración USB</strong>.</li>
+                    <li className="text-orange-300 font-semibold mt-2 list-none">Importante: Activa también "Depuración USB (Ajustes de seguridad)" para borrar bloatware.</li>
+                  </ol>
+                </div>
+
+                <div className="bg-slate-950/60 p-5 rounded-2xl border border-slate-800 flex flex-col">
+                  <h4 className="font-bold text-indigo-400 mb-3 text-base flex items-center gap-2">✨ Samsung Galaxy</h4>
+                  <ol className="list-decimal list-inside text-xs text-slate-300 space-y-2 flex-1">
+                    <li>Ve a <strong>Ajustes</strong> &gt; <strong>Acerca del teléfono</strong> &gt; <strong>Información de software</strong>.</li>
+                    <li>Toca 7 veces en <strong>Número de compilación</strong>.</li>
+                    <li>Vuelve a la pantalla principal de Ajustes, baja hasta el final y entra en <strong>Opciones de desarrollador</strong>.</li>
+                    <li>Activa <strong>Depuración USB</strong>.</li>
+                  </ol>
+                </div>
+
+                <div className="bg-slate-950/60 p-5 rounded-2xl border border-slate-800 flex flex-col">
+                  <h4 className="font-bold text-teal-400 mb-3 text-base flex items-center gap-2">⚡ Motorola / Pixel</h4>
+                  <ol className="list-decimal list-inside text-xs text-slate-300 space-y-2 flex-1">
+                    <li>Ve a <strong>Ajustes</strong> &gt; <strong>Acerca del teléfono</strong>.</li>
+                    <li>Baja del todo y toca 7 veces en <strong>Número de compilación</strong>.</li>
+                    <li>Ve a <strong>Sistema</strong> &gt; <strong>Opciones avanzadas</strong> &gt; <strong>Opciones de desarrollador</strong>.</li>
+                    <li>Activa <strong>Depuración USB</strong>.</li>
+                  </ol>
+                </div>
+              </div>
+
+              <div className="mt-6 bg-blue-950/30 border border-blue-500/30 p-4 rounded-xl flex items-start space-x-3">
+                <AlertCircle className="w-5 h-5 text-blue-400 shrink-0 mt-0.5" />
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  <strong>Paso Final:</strong> Una vez activada la opción, conecta el teléfono por cable a la computadora. En la pantalla de tu celular aparecerá un mensaje preguntando: <em>"¿Permitir depuración USB desde esta computadora?"</em>. Selecciona <strong>"Permitir siempre"</strong> y presiona OK. Luego, haz clic en el botón "Actualizar Dispositivos".
+                </p>
+              </div>
+
+              <div className="mt-6 flex justify-end">
+                <button
+                  onClick={() => setShowUsbGuideModal(false)}
+                  className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition-all shadow-md"
+                >
+                  Entendido / Cerrar Guía
+                </button>
+              </div>
+            </div>
           </div>
-        )}
-      </main>
+        </div>
+      )}
 
 
       {/* GLOBAL TOAST NOTIFICATIONS */}
