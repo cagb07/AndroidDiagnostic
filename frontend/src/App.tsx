@@ -64,6 +64,8 @@ function App() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
+  const [deviceAuthError, setDeviceAuthError] = useState<'unauthorized' | 'offline' | null>(null);
+  const [isReconnectingAdb, setIsReconnectingAdb] = useState(false);
   const [batteryInfo, setBatteryInfo] = useState<Record<string, string> | null>(null);
   const [apps, setApps] = useState<AppItem[]>([]);
   const [selectedApp, setSelectedApp] = useState<AppItem | null>(null);
@@ -846,10 +848,43 @@ function App() {
     }
   };
 
+  const handleAdbReconnect = async () => {
+    setIsReconnectingAdb(true);
+    try {
+      const res = await axios.post(`${API_BASE}/adb/reconnect`);
+      if (res.data.success) {
+        addToast(res.data.message || 'Comando de reconexión enviado. Revisa la pantalla de tu teléfono.', 'info');
+        if (res.data.devices) setDevices(res.data.devices);
+        setDeviceAuthError(null);
+      }
+    } catch (e: any) {
+      addToast('Error al reconectar ADB: ' + (e.response?.data?.error || e.message), 'error');
+    } finally {
+      setIsReconnectingAdb(false);
+    }
+  };
+
+  const handleAdbRestart = async () => {
+    setIsReconnectingAdb(true);
+    try {
+      const res = await axios.post(`${API_BASE}/adb/restart`);
+      if (res.data.success) {
+        addToast(res.data.message || 'Servidor ADB reiniciado con éxito.', 'success');
+        if (res.data.devices) setDevices(res.data.devices);
+        setDeviceAuthError(null);
+      }
+    } catch (e: any) {
+      addToast('Error al reiniciar ADB: ' + (e.response?.data?.error || e.message), 'error');
+    } finally {
+      setIsReconnectingAdb(false);
+    }
+  };
+
   const fetchDeviceInfo = async (id: string) => {
     try {
       const res = await axios.get(`${API_BASE}/device/${id}/info`);
       if (res.data.success) {
+        setDeviceAuthError(null);
         setDeviceInfo(res.data.data);
         const b = (
           res.data.data?.brand ||
@@ -869,14 +904,25 @@ function App() {
           setScreenResolution(res.data.data.resolution);
         }
       }
-    } catch (err) { console.error('Failed to fetch device info', err); }
+    } catch (err: any) {
+      if (err.response?.status === 401 || err.response?.data?.unauthorized) {
+        setDeviceAuthError('unauthorized');
+      } else if (err.response?.status === 503 || err.response?.data?.deviceOffline) {
+        setDeviceAuthError('offline');
+      }
+      console.warn('Información de dispositivo no disponible:', err.response?.data?.error || err.message);
+    }
   };
 
   const fetchBatteryInfo = async (id: string) => {
     try {
       const res = await axios.get(`${API_BASE}/device/${id}/battery`);
       if (res.data.success) setBatteryInfo(res.data.data);
-    } catch (err) { console.error('Failed to fetch battery info', err); }
+    } catch (err: any) {
+      if (err.response?.status === 401) setDeviceAuthError('unauthorized');
+      else if (err.response?.status === 503) setDeviceAuthError('offline');
+      console.warn('Batería no disponible:', err.response?.data?.error || err.message);
+    }
   };
 
   const fetchApps = async (id: string) => {
@@ -887,7 +933,11 @@ function App() {
     try {
       const res = await axios.get(`${API_BASE}/device/${id}/apps`);
       if (res.data.success) setApps(res.data.apps);
-    } catch (err) { console.error('Failed to fetch apps', err); }
+    } catch (err: any) {
+      if (err.response?.status === 401) setDeviceAuthError('unauthorized');
+      else if (err.response?.status === 503) setDeviceAuthError('offline');
+      console.warn('Apps no disponibles:', err.response?.data?.error || err.message);
+    }
   };
 
   const runMalwareScan = async () => {
@@ -945,7 +995,11 @@ function App() {
     try {
       const res = await axios.get(`${API_BASE}/device/${id}/sensors`);
       if (res.data.success) setSensors(res.data.sensors);
-    } catch (err) { console.error('Failed to fetch sensors', err); }
+    } catch (err: any) {
+      if (err.response?.status === 401) setDeviceAuthError('unauthorized');
+      else if (err.response?.status === 503) setDeviceAuthError('offline');
+      console.warn('Sensores no disponibles:', err.response?.data?.error || err.message);
+    }
   };
 
   const fetchBackupsList = async () => {
@@ -962,7 +1016,11 @@ function App() {
     try {
       const res = await axios.get(`${API_BASE}/device/${id}/diagnostics/advanced`);
       if (res.data.success) setAdvancedDiagnostics(res.data.data);
-    } catch (err) { console.error('Failed to fetch advanced diagnostics', err); }
+    } catch (err: any) {
+      if (err.response?.status === 401) setDeviceAuthError('unauthorized');
+      else if (err.response?.status === 503) setDeviceAuthError('offline');
+      console.warn('Diagnósticos avanzados no disponibles:', err.response?.data?.error || err.message);
+    }
   };
 
   const fetchThermalData = async () => {
@@ -1438,14 +1496,28 @@ function App() {
   useEffect(() => {
     if (selectedDevice) {
       const devObj = devices.find(d => d.id === selectedDevice);
+      const isUnauth = devObj?.type === 'unauthorized' || deviceAuthError === 'unauthorized';
+      const isOff = devObj?.type === 'offline' || deviceAuthError === 'offline';
+
+      if (devObj?.type === 'unauthorized') {
+        setDeviceAuthError('unauthorized');
+      } else if (devObj?.type === 'offline') {
+        setDeviceAuthError('offline');
+      } else if (devObj?.type === 'device') {
+        setDeviceAuthError(null);
+      }
+
+      if (isUnauth || isOff) {
+        return;
+      }
+
       const isNonStandardMode = selectedDevice === 'SAMSUNG-ODIN-MODE' ||
                                 selectedDevice.includes('ODIN') ||
                                 selectedDevice.includes('DOWNLOAD') ||
                                 devObj?.type === 'download' ||
                                 devObj?.type === 'fastboot' ||
                                 devObj?.type === 'sideload' ||
-                                devObj?.type === 'recovery' ||
-                                devObj?.type === 'unauthorized';
+                                devObj?.type === 'recovery';
 
       fetchDeviceInfo(selectedDevice);
       if (isNonStandardMode) {
@@ -2227,24 +2299,61 @@ function App() {
             </div>
 
             {devices.length > 0 ? (
-              devices.map((device) => (
-                <div
-                  key={device.id}
-                  onClick={() => setSelectedDevice(device.id)}
-                  className={`p-4 rounded-2xl cursor-pointer transition-all border ${selectedDevice === device.id
-                    ? 'bg-blue-500/10 border-blue-500/50 shadow-[0_0_20px_rgba(59,130,246,0.15)] scale-[1.02]'
-                    : 'bg-slate-900/50 border-slate-700 hover:bg-slate-800'
+              devices.map((device) => {
+                const isThisUnauth = device.type === 'unauthorized' || (selectedDevice === device.id && deviceAuthError === 'unauthorized');
+                const isThisOffline = device.type === 'offline' || (selectedDevice === device.id && deviceAuthError === 'offline');
+                return (
+                  <div
+                    key={device.id}
+                    onClick={() => setSelectedDevice(device.id)}
+                    className={`p-4 rounded-2xl cursor-pointer transition-all border ${
+                      selectedDevice === device.id
+                        ? isThisUnauth
+                          ? 'bg-amber-500/10 border-amber-500/60 shadow-[0_0_20px_rgba(245,158,11,0.15)] scale-[1.02]'
+                          : isThisOffline
+                          ? 'bg-rose-500/10 border-rose-500/60 shadow-[0_0_20px_rgba(244,63,94,0.15)] scale-[1.02]'
+                          : 'bg-blue-500/10 border-blue-500/50 shadow-[0_0_20px_rgba(59,130,246,0.15)] scale-[1.02]'
+                        : 'bg-slate-900/50 border-slate-700 hover:bg-slate-800'
                     }`}
-                >
-                  <div className="flex items-center space-x-3">
-                    <Smartphone className={selectedDevice === device.id ? 'text-blue-400' : 'text-slate-400'} />
-                    <div>
-                      <p className="font-semibold text-sm text-slate-200">{device.id}</p>
-                      <p className="text-xs text-slate-500 capitalize">{device.type}</p>
+                  >
+                    <div className="flex items-center space-x-3">
+                      <div className="shrink-0">
+                        {isThisUnauth ? (
+                          <ShieldAlert className="w-5 h-5 text-amber-400" />
+                        ) : isThisOffline ? (
+                          <AlertTriangle className="w-5 h-5 text-rose-400" />
+                        ) : (
+                          <Smartphone className={selectedDevice === device.id ? 'text-blue-400' : 'text-slate-400'} />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-1">
+                          <p className="font-semibold text-sm text-slate-200 truncate">{device.id}</p>
+                          {isThisUnauth && (
+                            <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-amber-500/20 text-amber-400 border border-amber-500/40 shrink-0">
+                              401 Sin Permiso
+                            </span>
+                          )}
+                          {isThisOffline && (
+                            <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-rose-500/20 text-rose-400 border border-rose-500/40 shrink-0">
+                              Offline
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          {isThisUnauth
+                            ? 'Acepta huella RSA en el móvil'
+                            : isThisOffline
+                            ? 'Desconectado / Offline'
+                            : device.type === 'device'
+                            ? 'Autorizado y Listo'
+                            : device.type}
+                        </p>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             ) : (
               <div className="p-5 rounded-2xl bg-slate-900/60 border border-dashed border-slate-700/80 shadow-lg text-center space-y-4">
                 <div className="w-12 h-12 mx-auto rounded-full bg-slate-800/80 border border-slate-700 flex items-center justify-center text-slate-400">
@@ -2306,6 +2415,110 @@ function App() {
             )}
                 {(() => {
                   const currentDev = devices.find(d => d.id === selectedDevice);
+                  const isUnauth = currentDev?.type === 'unauthorized' || deviceAuthError === 'unauthorized';
+                  const isOff = currentDev?.type === 'offline' || deviceAuthError === 'offline';
+
+                  if (isUnauth) {
+                    return (
+                      <div className="p-5 rounded-3xl bg-gradient-to-r from-amber-950/50 via-slate-900/90 to-amber-950/40 border-2 border-amber-500/50 text-amber-200 shadow-[0_0_30px_rgba(245,158,11,0.15)] flex flex-col md:flex-row items-start md:items-center justify-between gap-5">
+                        <div className="flex items-start space-x-4">
+                          <div className="p-3 bg-amber-500/20 rounded-2xl border border-amber-500/50 text-amber-400 mt-1 shrink-0 animate-pulse">
+                            <ShieldAlert className="w-7 h-7" />
+                          </div>
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h4 className="font-bold text-amber-300 text-lg">
+                                Dispositivo Conectado pero No Autorizado
+                              </h4>
+                              <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-2 py-0.5 rounded-full font-mono uppercase font-bold">
+                                Error 401: Falta Huella RSA
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-300 mt-1.5 max-w-2xl leading-relaxed">
+                              El dispositivo <span className="font-mono font-bold text-amber-300">{selectedDevice}</span> está conectado, pero Android bloqueó el acceso. Tu teléfono requiere que apruebes la conexión en la pantalla para permitir diagnósticos y comandos.
+                            </p>
+                            <div className="mt-3 bg-black/40 border border-amber-500/30 rounded-xl p-3 text-xs space-y-1">
+                              <p className="font-semibold text-amber-400 flex items-center gap-1.5">
+                                <Unlock className="w-3.5 h-3.5" /> ¿Cómo autorizarlo en tu teléfono?
+                              </p>
+                              <ol className="list-decimal list-inside text-slate-300 space-y-1 pl-1">
+                                <li>Desbloquea la pantalla de tu teléfono ahora mismo.</li>
+                                <li>Busca la ventana emergente: <strong>"¿Permitir depuración por USB?"</strong></li>
+                                <li>Marca la casilla <strong>"Permitir siempre desde esta computadora"</strong> y pulsa <strong>Permitir</strong>.</li>
+                              </ol>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex flex-col sm:flex-row md:flex-col gap-2 shrink-0 w-full md:w-auto">
+                          <button
+                            onClick={handleAdbReconnect}
+                            disabled={isReconnectingAdb}
+                            className="whitespace-nowrap px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-slate-950 font-bold text-xs transition-all shadow-lg flex items-center justify-center gap-2 disabled:opacity-50"
+                          >
+                            <RefreshCw className={`w-3.5 h-3.5 ${isReconnectingAdb ? 'animate-spin' : ''}`} />
+                            <span>{isReconnectingAdb ? 'Reconectando...' : 'Re-enviar Diálogo al Móvil'}</span>
+                          </button>
+                          <button
+                            onClick={handleAdbRestart}
+                            disabled={isReconnectingAdb}
+                            className="whitespace-nowrap px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs transition-all border border-slate-700 text-center disabled:opacity-50"
+                          >
+                            Reiniciar Servidor ADB
+                          </button>
+                          <button
+                            onClick={fetchDevices}
+                            disabled={loading}
+                            className="whitespace-nowrap px-4 py-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-400 hover:text-slate-200 text-xs transition-all border border-slate-800 text-center disabled:opacity-50"
+                          >
+                            Re-escanear
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  if (isOff) {
+                    return (
+                      <div className="p-5 rounded-3xl bg-gradient-to-r from-rose-950/50 via-slate-900/90 to-rose-950/40 border-2 border-rose-500/50 text-rose-200 shadow-[0_0_30px_rgba(244,63,94,0.15)] flex flex-col md:flex-row items-start md:items-center justify-between gap-5">
+                        <div className="flex items-start space-x-4">
+                          <div className="p-3 bg-rose-500/20 rounded-2xl border border-rose-500/50 text-rose-400 mt-1 shrink-0">
+                            <AlertTriangle className="w-7 h-7" />
+                          </div>
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h4 className="font-bold text-rose-300 text-lg">
+                                Dispositivo Desconectado o Fuera de Línea
+                              </h4>
+                              <span className="text-[10px] bg-rose-500/20 text-rose-300 border border-rose-500/40 px-2 py-0.5 rounded-full font-mono uppercase font-bold">
+                                Error 503: Offline
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-300 mt-1.5 max-w-2xl leading-relaxed">
+                              El dispositivo <span className="font-mono font-bold text-rose-300">{selectedDevice}</span> dejó de responder. Puede deberse a un cable USB flojo, reinicio del teléfono o a que el conector USB pasó a modo "Sólo carga".
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex flex-col sm:flex-row md:flex-col gap-2 shrink-0 w-full md:w-auto">
+                          <button
+                            onClick={handleAdbReconnect}
+                            disabled={isReconnectingAdb}
+                            className="whitespace-nowrap px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs transition-all shadow-lg flex items-center justify-center gap-2 disabled:opacity-50"
+                          >
+                            <RefreshCw className={`w-3.5 h-3.5 ${isReconnectingAdb ? 'animate-spin' : ''}`} />
+                            <span>{isReconnectingAdb ? 'Reconectando...' : 'Reconectar ADB'}</span>
+                          </button>
+                          <button
+                            onClick={fetchDevices}
+                            disabled={loading}
+                            className="whitespace-nowrap px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs transition-all border border-slate-700 text-center disabled:opacity-50"
+                          >
+                            Re-escanear
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  }
+
                   if (currentDev?.type === 'sideload' || deviceInfo?.isSideload) {
                     return (
                       <div className="p-5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-200 shadow-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-4">

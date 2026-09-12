@@ -205,6 +205,36 @@ app.get('/api/devices', async (req, res) => {
   }
 });
 
+app.post('/api/adb/reconnect', async (req, res) => {
+  try {
+    try {
+      await execAsync(`${ADB_PATH} reconnect offline`);
+    } catch {}
+    try {
+      await execAsync(`${ADB_PATH} reconnect`);
+    } catch {}
+    const devices = await getDeviceList();
+    broadcastDevices();
+    res.json({ success: true, message: 'Reconexión ADB ejecutada. Revisa la pantalla de tu teléfono.', devices });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/adb/restart', async (req, res) => {
+  try {
+    try {
+      await execAsync(`${ADB_PATH} kill-server`);
+    } catch {}
+    await execAsync(`${ADB_PATH} start-server`);
+    const devices = await getDeviceList();
+    broadcastDevices();
+    res.json({ success: true, message: 'Servidor ADB reiniciado con éxito.', devices });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Server-Sent Events (SSE) for real-time device connection/disconnection
 app.get('/api/devices/events', async (req, res) => {
   res.writeHead(200, {
