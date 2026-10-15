@@ -3,6 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { Smartphone, Battery, Info, Activity, RefreshCw, Power, Zap, PlaySquare, LayoutGrid, Trash2, TerminalSquare, Play, Square, HardDriveDownload, ShieldAlert, Unlock, UploadCloud, AlertCircle, Volume2, Sun, Moon, PowerOff, ShieldQuestion, Camera, MonitorPlay, Lock, Wrench, Cpu, Database, Wifi, Thermometer, MemoryStick, ServerCrash, Box, Upload, Terminal, FolderOpen, EyeOff, Eye, X, Maximize, LayoutDashboard, Globe, Radar, Bug, Flame, ChevronLeft, Circle, Film, FileText, Printer, Copy, Keyboard, Clipboard, CheckCircle2, AlertTriangle, XCircle, ShieldCheck, Radio, Signal, ExternalLink, Search, Hash, Download, Layers, Sparkles, BookOpen } from 'lucide-react';
+import { SamsungToolTab } from './components/SamsungToolTab';
+import { WebUsbOdinModal } from './components/WebUsbOdinModal';
 
 const API_BASE = 'http://localhost:3001/api';
 
@@ -70,7 +72,7 @@ function App() {
   const [apps, setApps] = useState<AppItem[]>([]);
   const [selectedApp, setSelectedApp] = useState<AppItem | null>(null);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'power' | 'hardware' | 'apps' | 'logs' | 'backup' | 'root' | 'odin' | 'bypass' | 'security' | 'maintenance' | 'terminal' | 'files' | 'screen' | 'privacy' | 'network' | 'taskmanager' | 'screentweaks' | 'deepscanner' | 'devtoggles' | 'thermal' | 'spoofing' | 'repair'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'power' | 'hardware' | 'apps' | 'logs' | 'backup' | 'root' | 'odin' | 'samfw' | 'bypass' | 'security' | 'maintenance' | 'terminal' | 'files' | 'screen' | 'privacy' | 'network' | 'taskmanager' | 'screentweaks' | 'deepscanner' | 'devtoggles' | 'thermal' | 'spoofing' | 'repair'>('dashboard');
   const [logs, setLogs] = useState<string[]>([]);
   const [isLogging, setIsLogging] = useState(false);
   const [disclaimerAccepted, setDisclaimerAccepted] = useState(false);
@@ -195,6 +197,7 @@ function App() {
 
   // Samsung Odin (OdinMac Engine) State
   const [odinStatus, setOdinStatus] = useState<any | null>(null);
+  const [showWebUsbOdinModal, setShowWebUsbOdinModal] = useState(false);
   const [odinDeviceDetected, setOdinDeviceDetected] = useState<boolean | null>(null);
   const [isOdinDetecting, setIsOdinDetecting] = useState(false);
   const [isOdinRebooting, setIsOdinRebooting] = useState(false);
@@ -2275,6 +2278,10 @@ function App() {
             <Flame className="w-4 h-4 text-sky-400" />
             <span>Samsung Odin (Heimdall)</span>
           </button>
+          <button onClick={() => setActiveTab('samfw')} className={`w-full flex items-center space-x-3 px-4 py-2.5 rounded-xl transition-all font-medium text-sm ${activeTab === 'samfw' ? 'bg-blue-600/20 text-blue-400 shadow-[inset_0_0_20px_rgba(37,99,235,0.15)] border border-blue-500/30' : 'hover:bg-[#0a0a0f] text-slate-400 hover:text-slate-200 border border-transparent'}`}>
+            <Wrench className="w-4 h-4 text-blue-400" />
+            <span>Samsung Tool (SamFw)</span>
+          </button>
           <button onClick={() => setActiveTab('bypass')} className={`w-full flex items-center space-x-3 px-4 py-2.5 rounded-xl transition-all font-medium text-sm ${activeTab === 'bypass' ? 'bg-violet-500/20 text-violet-400 shadow-[inset_0_0_20px_rgba(139,92,246,0.1)] border border-violet-500/20' : 'hover:bg-[#0a0a0f] text-slate-400 hover:text-slate-200 border border-transparent'}`}>
             <Unlock className="w-4 h-4" />
             <span>Bypass y Fuerza Bruta</span>
@@ -2299,6 +2306,7 @@ function App() {
                       activeTab === 'backup' ? 'Copias de Seguridad' :
                         activeTab === 'root' ? 'Root y Flasheo' :
                           activeTab === 'odin' ? 'Samsung Odin Flasher (OdinMac)' :
+                            activeTab === 'samfw' ? 'Samsung Service & FRP Tool (SamFw)' :
                             activeTab === 'terminal' ? 'Terminal ADB Directa' :
                               activeTab === 'files' ? 'Explorador de Archivos' :
                                 activeTab === 'screen' ? 'Transmisión de Pantalla' :
@@ -4529,7 +4537,16 @@ function App() {
                           )}
 
                           {/* Quick Actions Bar */}
-                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-4 border-t border-slate-800">
+                          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mt-4 pt-4 border-t border-slate-800">
+                            <button
+                              onClick={() => setShowWebUsbOdinModal(true)}
+                              className="py-2.5 px-4 bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white rounded-xl text-xs font-bold flex items-center justify-center space-x-2 transition-all shadow-[0_0_15px_rgba(14,165,233,0.3)]"
+                              title="Abre el flasheador nativo WebUSB (Odin v3.14+) directo en tu navegador"
+                            >
+                              <Flame className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
+                              <span>Flasheador WebUSB</span>
+                            </button>
+
                             <button
                               onClick={handleOdinDetect}
                               disabled={isOdinDetecting}
@@ -5063,33 +5080,35 @@ function App() {
                                   </span>
                                 </div>
 
-                                <button
-                                  onClick={handleFlashExtractedSession}
-                                  disabled={isFlashingExtracted}
-                                  className={`py-3.5 px-8 rounded-xl font-bold transition-all text-sm flex items-center justify-center space-x-3 shadow-lg ${
-                                    isFlashingExtracted
-                                      ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
-                                      : extractedSession.compatibility?.verdict?.canFlash === false
-                                      ? 'bg-gradient-to-r from-rose-700 to-red-600 hover:from-rose-600 hover:to-red-500 text-white shadow-[0_0_25px_rgba(225,29,72,0.4)]'
-                                      : 'bg-gradient-to-r from-emerald-600 to-sky-600 hover:from-emerald-500 hover:to-sky-500 text-white shadow-[0_0_25px_rgba(16,185,129,0.4)]'
-                                  }`}
-                                >
-                                  {isFlashingExtracted ? (
-                                    <>
-                                      <RefreshCw className="w-5 h-5 animate-spin" />
-                                      <span>Flasheando Firmware Verificado...</span>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Flame className="w-5 h-5 text-amber-300" />
-                                      <span>
-                                        {extractedSession.compatibility?.verdict?.canFlash === false
-                                          ? 'FORZAR FLASHEO DE SESIÓN (RIESGO ALTO)'
-                                          : 'FLASHEAR FIRMWARE VERIFICADO (HEIMDALL)'}
-                                      </span>
-                                    </>
-                                  )}
-                                </button>
+                                <div className="flex flex-wrap items-center gap-3">
+                                  <button
+                                    onClick={() => setShowWebUsbOdinModal(true)}
+                                    className="py-3.5 px-7 rounded-xl font-bold transition-all text-xs sm:text-sm flex items-center justify-center space-x-2.5 shadow-lg bg-gradient-to-r from-sky-600 via-indigo-600 to-emerald-600 hover:from-sky-500 hover:to-emerald-500 text-white shadow-[0_0_25px_rgba(14,165,233,0.4)]"
+                                  >
+                                    <Flame className="w-4 h-4 text-amber-300 animate-pulse" />
+                                    <span>FLASHEAR VÍA WEBUSB (ODIN MODERNO)</span>
+                                  </button>
+
+                                  <button
+                                    onClick={handleFlashExtractedSession}
+                                    disabled={isFlashingExtracted}
+                                    className={`py-3.5 px-5 rounded-xl font-semibold transition-all text-xs flex items-center justify-center space-x-2 border ${
+                                      isFlashingExtracted
+                                        ? 'bg-slate-800 text-slate-500 cursor-not-allowed border-slate-700'
+                                        : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 border-slate-700'
+                                    }`}
+                                    title="Flasheo alternativo mediante binario local CLI Heimdall"
+                                  >
+                                    {isFlashingExtracted ? (
+                                      <>
+                                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                        <span>Flasheando...</span>
+                                      </>
+                                    ) : (
+                                      <span>CLI Heimdall (Legacy)</span>
+                                    )}
+                                  </button>
+                                </div>
                               </div>
                             </div>
                           )}
@@ -5421,6 +5440,10 @@ function App() {
                       </div>
                     )}
 
+                    {/* SAMSUNG SERVICE & FRP TOOL (SAMFW PORT) */}
+                    {activeTab === 'samfw' && (
+                      <SamsungToolTab />
+                    )}
 
                     {/* SECURITY DIAGNOSTICS TAB */}
                     {activeTab === 'security' && (
@@ -8300,6 +8323,12 @@ function App() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* MODAL DE FLASHEO WEBUSB ODIN MODERNO */}
+      <WebUsbOdinModal
+        isOpen={showWebUsbOdinModal}
+        onClose={() => setShowWebUsbOdinModal(false)}
+      />
 
     </div>
   );

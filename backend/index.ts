@@ -7,6 +7,7 @@ import path from 'path';
 import fs from 'fs';
 import multer from 'multer';
 import gplay from 'google-play-scraper';
+import { SamsungService } from './samsungService';
 
 const execAsync = util.promisify(exec);
 const execFileAsync = util.promisify(execFile);
@@ -4052,6 +4053,18 @@ async function executeHeimdallFlash(
     log('Flasheo completado con éxito.');
     return (stdout || '') + '\n' + (stderr || '');
   } catch (err: any) {
+    const combinedInitial = ((err.stdout || '') + '\n' + (err.stderr || '') + '\n' + (err.message || '')).toLowerCase();
+    if (combinedInitial.includes('protocol initialisation failed') || combinedInitial.includes('failed to receive handshake') || combinedInitial.includes('result: -7') || combinedInitial.includes('failed to begin session')) {
+      log('Detectado estado de sesión pendiente en USB. Reintentando flasheo con --resume...');
+      try {
+        const { stdout: rOut, stderr: rErr } = await execAsync(`${flashCmd} --resume`, { maxBuffer: 50 * 1024 * 1024 });
+        log('Flasheo completado con éxito con --resume.');
+        return (rOut || '') + '\n' + (rErr || '');
+      } catch (retryErr: any) {
+        err = retryErr;
+      }
+    }
+
     const combined = ((err.stdout || '') + '\n' + (err.stderr || '') + '\n' + (err.message || '')).toLowerCase();
     if (combined.includes('protocol initialisation failed') || combined.includes('failed to receive handshake') || combined.includes('result: -7')) {
       const handshakeErr: any = new Error(
@@ -4421,6 +4434,189 @@ app.post('/api/odin/flash', upload.fields([
       error: err.message,
       logs: logs.join('\n') + '\n' + (err.stdout || '') + '\n' + (err.stderr || '')
     });
+  }
+});
+
+// Expose extracted partition images for WebUSB / Browser Flashing
+app.use('/firmware-blobs', express.static(path.join(uploadDir, 'odin_session_a525m')));
+
+app.get('/api/odin/session-partitions', (req, res) => {
+  const sessionDir = path.join(uploadDir, 'odin_session_a525m');
+  if (!fs.existsSync(sessionDir)) {
+    return res.status(404).json({ success: false, error: 'Sesión no encontrada' });
+  }
+
+  // Parse PIT to get exact partition names for each flash filename
+  const pitMap = new Map<string, string>();
+  const pitFiles = fs.readdirSync(sessionDir).filter(f => f.endsWith('.pit'));
+  let pitUrl: string | null = null;
+  if (pitFiles.length > 0) {
+    pitUrl = `/firmware-blobs/${pitFiles[0]}`;
+    try {
+      const pitBuf = fs.readFileSync(path.join(sessionDir, pitFiles[0]));
+      const entryCount = pitBuf.readUInt32LE(4);
+      let offset = 28;
+      for (let i = 0; i < entryCount && offset + 132 <= pitBuf.length; i++) {
+        const partName = pitBuf.toString('utf8', offset + 36, offset + 68).replace(/\0.*$/, '').trim();
+        const fileName = pitBuf.toString('utf8', offset + 68, offset + 100).replace(/\0.*$/, '').trim();
+        if (partName && fileName) {
+          pitMap.set(fileName.toLowerCase(), partName);
+        }
+        offset += 132;
+      }
+    } catch (e: any) {
+      console.warn('Could not parse PIT file:', e.message);
+    }
+  }
+
+  const results: { partition: string; filename: string; relativeUrl: string; size: number; slot: string }[] = [];
+  const seenPartitions = new Set<string>();
+
+  // Order: BL -> AP -> CP -> CSC
+  const dirs = [
+    { slot: 'BL', dir: 'bl' },
+    { slot: 'AP', dir: 'ap' },
+    { slot: 'CP', dir: 'cp' },
+    { slot: 'CSC', dir: 'csc' }
+  ];
+
+  for (const { slot, dir } of dirs) {
+    const sub = path.join(sessionDir, dir);
+    if (!fs.existsSync(sub)) continue;
+    const files = fs.readdirSync(sub);
+    for (const f of files) {
+      if (f.match(/\.(img|bin|elf|mbn|fv)$/i)) {
+        const full = path.join(sub, f);
+        const st = fs.statSync(full);
+        const mappedPart = pitMap.get(f.toLowerCase()) || f.replace(/\.(img|bin|elf|mbn|fv)$/i, '').toUpperCase();
+        
+        // Prevent flashing duplicate partitions (e.g. vbmeta in both BL and AP)
+        if (seenPartitions.has(mappedPart)) {
+          continue;
+        }
+        seenPartitions.add(mappedPart);
+
+        results.push({
+          partition: mappedPart,
+          filename: f,
+          relativeUrl: `/firmware-blobs/${dir}/${f}`,
+          size: st.size,
+          slot
+        });
+      }
+    }
+  }
+
+  // Canonical Odin flashing sequence priority:
+  const canonicalPriority = [
+    // 1. Primary bootloaders (BL)
+    'xbl', 'xbl_config', 'abl', 'tz', 'hyp', 'devcfg', 'bksecapp', 'aop',
+    'cmnlib', 'cmnlib64', 'km4', 'qupv3fw', 'storsec', 'uefi_sec', 'sec',
+    'apdp', 'vbmeta', 'vaultkeeper', 'tz_kg', 'tz_hdm', 'imagefv', 'quest',
+    // 2. Core OS (AP)
+    'boot', 'recovery', 'dtbo', 'misc', 'persist', 'vbmeta_system',
+    // 3. Dynamic / Large Filesystems (AP)
+    'super', 'userdata',
+    // 4. Modem / Baseband / Radio (CP & BL radio)
+    'modem', 'non-hlos', 'apnhlos', 'dspso', 'dsp',
+    // 5. CSC / Customizations
+    'cache', 'omr', 'optics', 'prism'
+  ];
+
+  results.sort((a, b) => {
+    const aBase = a.filename.replace(/\.(img|bin|elf|mbn|fv)$/i, '').toLowerCase();
+    const bBase = b.filename.replace(/\.(img|bin|elf|mbn|fv)$/i, '').toLowerCase();
+    const aIdx = canonicalPriority.findIndex(p => aBase.includes(p) || a.partition.toLowerCase().includes(p));
+    const bIdx = canonicalPriority.findIndex(p => bBase.includes(p) || b.partition.toLowerCase().includes(p));
+    const orderA = aIdx === -1 ? 999 : aIdx;
+    const orderB = bIdx === -1 ? 999 : bIdx;
+    return orderA - orderB;
+  });
+
+  res.json({
+    success: true,
+    pitUrl,
+    partitions: results
+  });
+});
+
+// ==========================================
+// SAMSUNG TOOLKIT (SAMFW PORT / SERVICE TOOL)
+// ==========================================
+
+// Get Samsung serial/modem port connection status
+app.get('/api/samsung/status', async (req, res) => {
+  try {
+    const status = await SamsungService.getPortStatus();
+    res.json({ success: true, ...status });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Read MTP / Modem Device Info (Model, PDA, CSC, IMEI, Serial)
+app.get('/api/samsung/read-info', async (req, res) => {
+  try {
+    const info = await SamsungService.readInfo();
+    res.json({ success: true, info });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// Send custom AT command
+app.post('/api/samsung/at-command', async (req, res) => {
+  const { command } = req.body;
+  if (!command) {
+    return res.status(400).json({ success: false, error: 'Comando requerido' });
+  }
+  try {
+    const response = await SamsungService.sendAtCommand(command);
+    res.json({ success: true, response });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// Change Samsung CSC
+app.post('/api/samsung/change-csc', async (req, res) => {
+  const { csc } = req.body;
+  try {
+    const result = await SamsungService.changeCsc(csc);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// Reboot mode (Download, Recovery, Normal)
+app.post('/api/samsung/reboot-mode', async (req, res) => {
+  const { mode } = req.body;
+  try {
+    const result = await SamsungService.rebootMode(mode || 'download', ADB_PATH);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// Execute FRP Test-Mode Exploit with SSE streaming logs
+app.get('/api/samsung/frp-exploit-stream', async (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
+  const sendLog = (msg: string) => {
+    res.write(`data: ${JSON.stringify({ log: msg })}\n\n`);
+  };
+
+  try {
+    const result = await SamsungService.executeFrpBypass(ADB_PATH, sendLog);
+    res.write(`data: ${JSON.stringify({ finished: true, ...result })}\n\n`);
+    res.end();
+  } catch (err: any) {
+    res.write(`data: ${JSON.stringify({ finished: true, success: false, error: err.message })}\n\n`);
+    res.end();
   }
 });
 

@@ -3,8 +3,8 @@
 # Change to the directory where the script is located
 cd "$(dirname "$0")" || exit
 
-# Add Android SDK platform-tools to PATH so adb can be found
-export PATH=$PATH:$HOME/Library/Android/sdk/platform-tools
+# Add Android SDK platform-tools and Node to PATH
+export PATH="$HOME/.local/node/bin:/usr/local/bin:/opt/homebrew/bin:$HOME/Library/Android/sdk/platform-tools:$PATH"
 
 # Start backend
 echo "Starting backend..."
