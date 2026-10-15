@@ -250,10 +250,6 @@ export const WebUsbOdinModal: React.FC<WebUsbOdinModalProps> = ({ isOpen, onClos
     addLog('=============================================');
 
     try {
-      addLog('Iniciando sesión Odin en el dispositivo...');
-      await device.beginSession();
-      addLog('✓ Sesión Odin iniciada exitosamente.');
-
       // 1. Flash PIT if explicitly requested
       if (flashPit && pitUrl) {
         addLog('Descargando archivo PIT oficial...');
@@ -262,8 +258,6 @@ export const WebUsbOdinModal: React.FC<WebUsbOdinModalProps> = ({ isOpen, onClos
         addLog('Flasheando y re-particionando dispositivo con PIT oficial...');
         await device.flashPit(pitBlob);
         addLog('✓ Re-particionado completado exitosamente.');
-        // Re-begin session since flashPit terminates it
-        await device.beginSession();
       }
 
       // Ensure device PIT is unpacked in session
@@ -275,7 +269,7 @@ export const WebUsbOdinModal: React.FC<WebUsbOdinModalProps> = ({ isOpen, onClos
         (device as any)._devicePit = pitData;
       }
 
-      // 2. Flash each selected partition in a single uninterrupted Odin session
+      // 2. Flash each selected partition using native LZ4 streaming protocol
       for (let i = 0; i < selectedParts.length; i++) {
         const part = selectedParts[i];
         setCurrentPartIndex(i + 1);
@@ -292,21 +286,18 @@ export const WebUsbOdinModal: React.FC<WebUsbOdinModalProps> = ({ isOpen, onClos
         }
         const blob = await resp.blob();
 
-        const entry = device._devicePit?.findEntryByName(part.partition);
-        if (!entry) {
-          throw new Error(`Partición ${part.partition} no encontrada en la tabla PIT`);
-        }
-
-        // Send file to Samsung device within the current session
+        // Flash to Samsung device using libmjolnir's native LZ4-aware flashPartition
         setSubProgressText(`Transmitiendo a Samsung (${(part.size / (1024 * 1024)).toFixed(1)} MB)...`);
-        await (device as any).setFlashTotalSize(blob.size);
-        await (device as any).sendFile(blob, entry.binaryType, entry.deviceType, entry.identifier);
+        await device.flashPartition(part.partition, blob);
 
         const duration = ((Date.now() - tStart) / 1000).toFixed(1);
         flashedBytes += part.size;
         const totalPct = Math.min(100, Math.round((flashedBytes / totalBytesToFlash) * 100));
         setTotalPercent(totalPct);
         addLog(`✓ ${part.partition} completada en ${duration}s.`);
+
+        // Brief delay between files to allow UFS flash commit
+        await new Promise((r) => setTimeout(r, 100));
       }
 
       // 3. Finalize

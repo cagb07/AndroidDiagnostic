@@ -4484,26 +4484,28 @@ app.get('/api/odin/session-partitions', (req, res) => {
     const sub = path.join(sessionDir, dir);
     if (!fs.existsSync(sub)) continue;
     const files = fs.readdirSync(sub);
-    for (const f of files) {
-      if (f.match(/\.(img|bin|elf|mbn|fv)$/i)) {
-        const full = path.join(sub, f);
-        const st = fs.statSync(full);
-        const mappedPart = pitMap.get(f.toLowerCase()) || f.replace(/\.(img|bin|elf|mbn|fv)$/i, '').toUpperCase();
-        
-        // Prevent flashing duplicate partitions (e.g. vbmeta in both BL and AP)
-        if (seenPartitions.has(mappedPart)) {
-          continue;
-        }
-        seenPartitions.add(mappedPart);
+    const lz4Files = files.filter(f => f.endsWith('.lz4'));
+    const targetFiles = lz4Files.length > 0 ? lz4Files : files.filter(f => f.match(/\.(img|bin|elf|mbn|fv)$/i));
 
-        results.push({
-          partition: mappedPart,
-          filename: f,
-          relativeUrl: `/firmware-blobs/${dir}/${f}`,
-          size: st.size,
-          slot
-        });
+    for (const f of targetFiles) {
+      const baseName = f.replace(/\.lz4$/i, '');
+      const full = path.join(sub, f);
+      const st = fs.statSync(full);
+      const mappedPart = pitMap.get(baseName.toLowerCase()) || baseName.replace(/\.(img|bin|elf|mbn|fv)$/i, '').toUpperCase();
+      
+      // Prevent flashing duplicate partitions (e.g. vbmeta in both BL and AP)
+      if (seenPartitions.has(mappedPart)) {
+        continue;
       }
+      seenPartitions.add(mappedPart);
+
+      results.push({
+        partition: mappedPart,
+        filename: f,
+        relativeUrl: `/firmware-blobs/${dir}/${f}`,
+        size: st.size,
+        slot
+      });
     }
   }
 
@@ -4524,8 +4526,8 @@ app.get('/api/odin/session-partitions', (req, res) => {
   ];
 
   results.sort((a, b) => {
-    const aBase = a.filename.replace(/\.(img|bin|elf|mbn|fv)$/i, '').toLowerCase();
-    const bBase = b.filename.replace(/\.(img|bin|elf|mbn|fv)$/i, '').toLowerCase();
+    const aBase = a.filename.replace(/\.lz4$/i, '').replace(/\.(img|bin|elf|mbn|fv)$/i, '').toLowerCase();
+    const bBase = b.filename.replace(/\.lz4$/i, '').replace(/\.(img|bin|elf|mbn|fv)$/i, '').toLowerCase();
     const aIdx = canonicalPriority.findIndex(p => aBase.includes(p) || a.partition.toLowerCase().includes(p));
     const bIdx = canonicalPriority.findIndex(p => bBase.includes(p) || b.partition.toLowerCase().includes(p));
     const orderA = aIdx === -1 ? 999 : aIdx;
